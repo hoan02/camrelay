@@ -1,0 +1,9 @@
+[
+  {
+    "id": "brand-example",
+    "name": "Dahua",
+    "main_server": "www.easy4ipcloud.com:8800",
+    "app_username": "REPLACE_WITH_PLATFORM_CLIENT_USERNAME",
+    "app_userkey": "REPLACE_WITH_PLATFORM_CLIENT_KEY"
+  }
+]

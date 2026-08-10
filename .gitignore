@@ -1,0 +1,31 @@
+# Rust build output and local binaries
+/target/
+*.exe
+*.pdb
+
+# Runtime configuration and credentials
+# Keep sanitized *.example.json files in Git instead.
+config.json
+brands.json
+cameras.json
+tokens.json
+config.local.json
+brands.local.json
+cameras.local.json
+tokens.local.json
+.env
+.env.*
+!.env.example
+
+# Logs and local runtime state
+*.log
+*.pid
+*.sqlite
+*.sqlite3
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.fleet/
+.DS_Store
+Thumbs.db

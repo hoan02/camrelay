@@ -1,0 +1,13 @@
+[
+  {
+    "id": "cam-example",
+    "name": "Front door",
+    "brand": "Dahua",
+    "serial": "REPLACE_WITH_DEVICE_SERIAL",
+    "username": "admin",
+    "password": "REPLACE_WITH_CAMERA_RTSP_PASSWORD",
+    "port": 554,
+    "local_port": 8551,
+    "auto_start": false
+  }
+]

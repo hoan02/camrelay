@@ -1,0 +1,9 @@
+[
+  {
+    "id": "token-example",
+    "name": "Frigate",
+    "token": "camrelay_REPLACE_ME",
+    "expires_at": null,
+    "enabled": true
+  }
+]
