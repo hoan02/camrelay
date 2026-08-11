@@ -140,7 +140,7 @@ async fn run_tunnel(
         &brand.app_username,
         &brand.app_userkey,
     )
-    .await;
+    .await?;
 
     let (dh_tx, dh_rx) = mpsc::channel::<PTCPEvent>(128);
     let session = Arc::new(Mutex::new(session));
@@ -153,8 +153,8 @@ async fn run_tunnel(
         .insert(camera.id.clone(), TunnelStatus::Running);
 
     println!(
-        "[{}] Ready — rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-        camera.name, camera.username, camera.password, camera.local_port
+        "[{}] Ready - local RTSP listener at 127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
+        camera.name, camera.local_port
     );
 
     let reader = Arc::new(socket);

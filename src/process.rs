@@ -18,7 +18,9 @@ pub async fn process_writer(
     mut rx: mpsc::Receiver<Vec<u8>>,
 ) {
     loop {
-        let data = rx.recv().await.unwrap();
+        let Some(data) = rx.recv().await else {
+            break;
+        };
         if writer.write_all(&data).await.is_err() {
             println!("Writer: Socket closed by peer.");
             break;
@@ -41,7 +43,7 @@ pub async fn process_reader(
             Ok(n) => {
                 if n == 0 {
                     println!("Reader: Socket closed by peer.");
-                    dh_tx.send(PTCPEvent::Disconnect(realm_id)).await.unwrap();
+                    let _ = dh_tx.send(PTCPEvent::Disconnect(realm_id)).await;
                     break;
                 }
 
@@ -49,15 +51,18 @@ pub async fn process_reader(
             }
             Err(e) => {
                 println!("Reader: {}", e);
-                dh_tx.send(PTCPEvent::Disconnect(realm_id)).await.unwrap();
+                let _ = dh_tx.send(PTCPEvent::Disconnect(realm_id)).await;
                 break;
             }
         };
 
-        dh_tx
+        if dh_tx
             .send(PTCPEvent::Data(realm_id, buf[0..n].to_vec()))
             .await
-            .unwrap();
+            .is_err()
+        {
+            break;
+        }
     }
 }
 
@@ -71,33 +76,47 @@ pub async fn dh_writer(
     remote_port: u32,
 ) {
     loop {
-        let ev = dh_rx.recv().await.unwrap();
+        let Some(ev) = dh_rx.recv().await else {
+            break;
+        };
 
         match ev {
             PTCPEvent::Heartbeat => {
                 let p = session.lock().unwrap().send(PTCPBody::Heartbeat);
-                socket.ptcp_request(p).await;
+                if let Err(e) = socket.ptcp_request(p).await {
+                    println!("P2P writer stopped: {e}");
+                    break;
+                }
             }
             PTCPEvent::Connect(realm) => {
                 let p = session
                     .lock()
                     .unwrap()
                     .send(PTCPBody::Bind(realm, remote_port));
-                socket.ptcp_request(p).await;
+                if let Err(e) = socket.ptcp_request(p).await {
+                    println!("P2P writer stopped: {e}");
+                    break;
+                }
             }
             PTCPEvent::Disconnect(realm) => {
                 let p = session
                     .lock()
                     .unwrap()
                     .send(PTCPBody::Status(realm, "DISC".to_string()));
-                socket.ptcp_request(p).await;
+                if let Err(e) = socket.ptcp_request(p).await {
+                    println!("P2P writer stopped: {e}");
+                    break;
+                }
             }
             PTCPEvent::Data(realm, data) => {
                 let p = session
                     .lock()
                     .unwrap()
                     .send(PTCPBody::Payload(PTCPPayload { realm, data }));
-                socket.ptcp_request(p).await;
+                if let Err(e) = socket.ptcp_request(p).await {
+                    println!("P2P writer stopped: {e}");
+                    break;
+                }
             }
         }
     }
@@ -113,7 +132,13 @@ pub async fn dh_reader(
     conn_channels: Arc<Mutex<HashMap<u32, oneshot::Sender<bool>>>>,
 ) {
     loop {
-        let packet = socket.ptcp_read().await;
+        let packet = match socket.ptcp_read().await {
+            Ok(packet) => packet,
+            Err(e) => {
+                println!("P2P reader stopped: {e}");
+                break;
+            }
+        };
         let packet = session.lock().unwrap().recv(packet);
 
         if let PTCPBody::Empty = packet.body {
@@ -121,22 +146,24 @@ pub async fn dh_reader(
         }
 
         let p = session.lock().unwrap().send(PTCPBody::Empty);
-        socket.ptcp_request(p).await;
+        if let Err(e) = socket.ptcp_request(p).await {
+            println!("P2P reader stopped: {e}");
+            break;
+        }
 
         match packet.body {
             PTCPBody::Status(realm, status) => {
                 if status == "CONN" {
-                    conn_channels
-                        .lock()
-                        .unwrap()
-                        .remove(&realm)
-                        .unwrap()
-                        .send(true)
-                        .unwrap();
+                    if let Some(sender) = conn_channels.lock().unwrap().remove(&realm) {
+                        let _ = sender.send(true);
+                    }
                 }
             }
             PTCPBody::Payload(p) => {
-                let tx = channels.lock().unwrap().get(&p.realm).unwrap().clone();
+                let Some(tx) = channels.lock().unwrap().get(&p.realm).cloned() else {
+                    println!("Realm {:08x} unavailable", p.realm);
+                    continue;
+                };
 
                 if tx.send(p.data).await.is_err() {
                     println!("Realm {:08x} unavailable", p.realm);
