@@ -85,6 +85,19 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
     let scoped_ticket_request = req.method() == Method::POST
         && (req.uri().path().ends_with("/playback-ticket")
             || req.uri().path().ends_with("/live-ticket"));
+    if req.method() == Method::GET
+        && legacy_secret_read_path(req.uri().path())
+        && !is_admin_role(&principal.role)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "auth.forbidden",
+                "message": "Only an owner or admin can read legacy credential fields."
+            })),
+        )
+            .into_response();
+    }
     if !matches!(
         req.method(),
         &Method::GET | &Method::HEAD | &Method::OPTIONS
@@ -137,6 +150,13 @@ fn unauthorized_response() -> Response {
 
 fn is_admin_role(role: &str) -> bool {
     matches!(role, "owner" | "admin")
+}
+
+fn legacy_secret_read_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/brands" | "/api/cameras" | "/api/cameras/all" | "/api/tokens"
+    )
 }
 
 async fn authenticate_token(state: &AppState, token: &str) -> Option<AuthPrincipal> {
@@ -2790,4 +2810,19 @@ pub fn create_router(state: AppState) -> Router {
         // `not_found_service` would return the right body with a misleading 404.
         .fallback_service(ServeDir::new(web_root).fallback(ServeFile::new(web_index)))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::legacy_secret_read_path;
+
+    #[test]
+    fn legacy_secret_routes_are_explicitly_scoped() {
+        assert!(legacy_secret_read_path("/api/brands"));
+        assert!(legacy_secret_read_path("/api/cameras"));
+        assert!(legacy_secret_read_path("/api/cameras/all"));
+        assert!(legacy_secret_read_path("/api/tokens"));
+        assert!(!legacy_secret_read_path("/api/v1/providers"));
+        assert!(!legacy_secret_read_path("/api/recordings"));
+    }
 }
