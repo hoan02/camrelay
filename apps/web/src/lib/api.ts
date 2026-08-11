@@ -7,6 +7,17 @@ export type Camera = {
   auto_start: boolean;
 };
 
+export type CameraInput = {
+  name: string;
+  brand: string;
+  serial: string;
+  username: string;
+  password: string;
+  port: number;
+  local_port: number;
+  auto_start: boolean;
+};
+
 export type Health = {
   api_version: string;
   status: "ok" | "degraded";
@@ -72,6 +83,7 @@ export const api = {
     }),
   logout: () => request<void>("/api/logout", { method: "POST" }),
   cameras: () => request<Camera[]>("/api/v1/cameras"),
+  createCamera: (input: CameraInput) => request<Camera>("/api/v1/cameras", { method: "POST", body: JSON.stringify(input) }),
   health: () => request<Health>("/api/v1/health"),
   recordings: () => request<Recording[]>("/api/v1/recordings"),
   providers: () => request<Provider[]>("/api/v1/providers"),

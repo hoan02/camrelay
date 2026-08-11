@@ -27,6 +27,7 @@ Implemented in the current migration checkpoint:
 
     GET    /api/v1/health                 public migration health
     GET    /api/v1/cameras                authenticated, secret-free summaries
+    POST   /api/v1/cameras                authenticated camera onboarding in legacy mode
     GET    /api/v1/providers               authenticated, secret-free summaries
     GET    /api/v1/recordings              authenticated, secret-free summaries
 
@@ -39,7 +40,6 @@ storage and authorization behavior is migrated from the legacy handlers:
     GET    /api/v1/me
 
     GET    /api/v1/cameras
-    POST   /api/v1/cameras
     GET    /api/v1/cameras/{camera_id}
     PATCH  /api/v1/cameras/{camera_id}
     POST   /api/v1/cameras/{camera_id}/start
@@ -65,3 +65,8 @@ storage and authorization behavior is migrated from the legacy handlers:
 | viewer | live view, permitted playback and export |
 
 Provider and camera secrets are never returned by GET endpoints. An update payload may contain a replacement secret; an omitted secret means keep the existing value.
+
+The current camera POST writes the legacy JSON source and returns only a
+secret-free summary. It deliberately returns `migration.camera_write_pending`
+when SQLite mode is enabled until tunnel startup, recording reconciliation,
+and CRUD all use the same database source of truth.

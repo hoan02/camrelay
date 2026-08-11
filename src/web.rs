@@ -224,6 +224,75 @@ async fn get_v1_cameras(State(state): State<AppState>) -> impl IntoResponse {
     .into_response()
 }
 
+async fn create_v1_camera(
+    State(state): State<AppState>,
+    Json(body): Json<CameraPayload>,
+) -> impl IntoResponse {
+    if state.storage.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "migration.camera_write_pending",
+                "message": "Camera writes are temporarily disabled while SQLite becomes the operational source."
+            })),
+        )
+            .into_response();
+    }
+    if body.name.trim().is_empty()
+        || body.brand.trim().is_empty()
+        || body.serial.trim().is_empty()
+        || body.username.trim().is_empty()
+        || body.password.is_empty()
+        || body.port == 0
+        || body.local_port == 0
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "camera.invalid_input",
+                "message": "Name, provider, serial, credentials, and valid ports are required."
+            })),
+        )
+            .into_response();
+    }
+
+    let mut cameras = load_cameras();
+    let camera = Camera {
+        id: Uuid::new_v4().to_string(),
+        name: body.name,
+        brand: body.brand,
+        serial: body.serial,
+        username: body.username,
+        password: body.password,
+        port: body.port,
+        local_port: body.local_port,
+        auto_start: body.auto_start,
+    };
+    cameras.push(camera.clone());
+    if save_cameras(&cameras).is_err() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "camera.save_failed",
+                "message": "Could not save camera configuration."
+            })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(CameraSummary {
+            id: camera.id,
+            name: camera.name,
+            brand: camera.brand,
+            serial: camera.serial,
+            local_port: camera.local_port,
+            auto_start: camera.auto_start,
+        }),
+    )
+        .into_response()
+}
+
 /* ─── Brand handlers ─── */
 
 async fn get_v1_recordings(
@@ -873,7 +942,7 @@ pub fn create_router(state: AppState) -> Router {
         ));
     let v1_public = Router::new().route("/health", get(v1_health));
     let v1_protected = Router::new()
-        .route("/cameras", get(get_v1_cameras))
+        .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
         .route("/providers", get(get_v1_providers))
         .route("/recordings", get(get_v1_recordings))
         .layer(middleware::from_fn_with_state(
