@@ -380,6 +380,8 @@ Next, in order:
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
 5. Verify the Flutter mobile client on Android/iOS and add a WebRTC adapter when the gateway contract is finalized; the source already includes ticket-backed HLS live and recorded playback.
 
+See [the media gateway design](docs/media-gateway.md) and [the authorized device validation matrix](docs/device-validation-matrix.md) for the next-phase contracts and evidence requirements.
+
 ## Protocol and investigation notes
 
 `dh-p2p.lua` can be loaded into Wireshark when investigating Dahua HTTP-like signaling and PTCP traffic. PTCP is a proprietary protocol reconstructed through reverse engineering; official protocol documentation is not included here.
