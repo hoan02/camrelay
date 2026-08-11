@@ -121,6 +121,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   late Future<Principal> _principal;
   late Future<List<CameraSummary>> _cameras;
+  late Future<List<TunnelSummary>> _tunnels;
   late Future<List<RecordingSummary>> _recordings;
 
   @override
@@ -132,20 +133,24 @@ class _HomeScreenState extends State<HomeScreen> {
   void _reload() {
     _principal = widget.api.me();
     _cameras = widget.api.cameras();
+    _tunnels = widget.api.tunnels();
     _recordings = widget.api.recordings();
   }
 
-  Future<void> _toggle(CameraSummary camera) async {
-    // The API returns lifecycle state from /tunnels; this foundation only
-    // exposes the explicit action. A richer status model will drive this UI
-    // once the live-media contract is finalized.
+  Future<void> _toggle(CameraSummary camera, bool running) async {
     try {
-      await widget.api.startCamera(camera.id);
+      if (running) {
+        await widget.api.stopCamera(camera.id);
+      } else {
+        await widget.api.startCamera(camera.id);
+      }
       if (mounted) setState(_reload);
     } on CamrelayApiException catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
     }
   }
+
+  String _statusFor(String id, List<TunnelSummary>? tunnels) => tunnels?.firstWhere((tunnel) => tunnel.id == id, orElse: () => const TunnelSummary(id: '', status: 'stopped')).status ?? 'stopped';
 
   Future<void> _openLive(CameraSummary camera) async {
     await Navigator.of(context).push<void>(
@@ -192,11 +197,18 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 24),
           Text('Cameras', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
-          FutureBuilder<List<CameraSummary>>(future: _cameras, builder: (context, snapshot) {
-            if (snapshot.hasError) return const _ErrorTile(message: 'Camera API is unavailable.');
-            if (!snapshot.hasData) return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()));
-            if (snapshot.data!.isEmpty) return const _EmptyTile(message: 'No cameras configured yet.');
-            return Column(children: snapshot.data!.map((camera) => Card(child: ListTile(leading: const Icon(Icons.videocam_outlined), title: Text(camera.name), subtitle: Text('${camera.brand} · ${camera.serial}'), trailing: Wrap(children: [IconButton(icon: const Icon(Icons.live_tv_outlined), tooltip: 'Watch live', onPressed: () => _openLive(camera)), IconButton(icon: const Icon(Icons.play_arrow), tooltip: 'Start relay', onPressed: () => _toggle(camera))]))).toList());
+          FutureBuilder<List<CameraSummary>>(future: _cameras, builder: (context, cameraSnapshot) {
+            if (cameraSnapshot.hasError) return const _ErrorTile(message: 'Camera API is unavailable.');
+            if (!cameraSnapshot.hasData) return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()));
+            if (cameraSnapshot.data!.isEmpty) return const _EmptyTile(message: 'No cameras configured yet.');
+            return FutureBuilder<List<TunnelSummary>>(future: _tunnels, builder: (context, tunnelSnapshot) {
+              final tunnels = tunnelSnapshot.data;
+              return Column(children: cameraSnapshot.data!.map((camera) {
+                final status = _statusFor(camera.id, tunnels);
+                final running = status == 'running';
+                return Card(child: ListTile(leading: Icon(running ? Icons.videocam : Icons.videocam_outlined), title: Text(camera.name), subtitle: Text('${camera.brand} · $status'), trailing: Wrap(children: [IconButton(icon: const Icon(Icons.live_tv_outlined), tooltip: 'Watch live', onPressed: running ? () => _openLive(camera) : null), IconButton(icon: Icon(running ? Icons.stop_circle_outlined : Icons.play_arrow), tooltip: running ? 'Stop relay' : 'Start relay', onPressed: () => _toggle(camera, running))]));
+              }).toList());
+            });
           }),
           const SizedBox(height: 24),
           Text('Recent recordings', style: Theme.of(context).textTheme.titleLarge),

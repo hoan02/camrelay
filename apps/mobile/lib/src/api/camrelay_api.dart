@@ -70,6 +70,11 @@ class CamrelayApi {
     return _list(payload).map(CameraSummary.fromJson).toList(growable: false);
   }
 
+  Future<List<TunnelSummary>> tunnels() async {
+    final payload = await _request('GET', '/api/v1/tunnels');
+    return _list(payload).map(TunnelSummary.fromJson).toList(growable: false);
+  }
+
   Future<List<RecordingSummary>> recordings() async {
     final payload = await _request('GET', '/api/v1/recordings');
     return _list(payload).map(RecordingSummary.fromJson).toList(growable: false);

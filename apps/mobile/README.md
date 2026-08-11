@@ -9,7 +9,7 @@ administrative web console.
 - sign in to a Camrelay appliance over HTTPS;
 - keep the bearer token in platform secure storage;
 - rotate an expiring bearer session once through the v1 refresh endpoint;
-- show camera state and start/stop controls for authorized users;
+- show tunnel state and start/stop controls for authorized users;
 - list recordings and request ticket-protected playback;
 - keep all P2P platform, camera RTSP, and archive credentials on the server.
 

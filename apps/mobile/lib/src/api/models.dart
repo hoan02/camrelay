@@ -43,6 +43,18 @@ class CameraSummary {
       );
 }
 
+class TunnelSummary {
+  const TunnelSummary({required this.id, required this.status});
+
+  final String id;
+  final String status;
+
+  factory TunnelSummary.fromJson(Map<String, dynamic> json) => TunnelSummary(
+        id: json['id'] as String? ?? '',
+        status: json['status'] as String? ?? 'stopped',
+      );
+}
+
 class RecordingSummary {
   const RecordingSummary({
     required this.id,
