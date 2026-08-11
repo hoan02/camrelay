@@ -107,7 +107,7 @@ impl RecordingManager {
         self.reap_finished();
         self.stop_inactive(cameras, tunnels);
         self.index_closed_files(cameras);
-        self.backfill_missing_checksums();
+        self.backfill_missing_checksums().await;
 
         if self.config.recordings_enabled {
             for camera in cameras
@@ -131,7 +131,7 @@ impl RecordingManager {
             return Ok(record);
         }
         if record.checksum_sha256.is_none() {
-            let checksum = sha256_file(Path::new(&record.local_path))?;
+            let checksum = sha256_file_async(Path::new(&record.local_path)).await?;
             self.set_checksum(&record.id, checksum.clone());
             record.checksum_sha256 = Some(checksum);
         }
@@ -359,7 +359,7 @@ impl RecordingManager {
                     bytes: metadata.len(),
                     status: "local".to_string(),
                     error: None,
-                    checksum_sha256: sha256_file(&path).ok(),
+                    checksum_sha256: None,
                 });
                 changed = true;
             }
@@ -370,7 +370,7 @@ impl RecordingManager {
         }
     }
 
-    fn backfill_missing_checksums(&self) {
+    async fn backfill_missing_checksums(&self) {
         let candidates = self
             .records
             .lock()
@@ -382,7 +382,7 @@ impl RecordingManager {
             .collect::<Vec<_>>();
         let mut changed = false;
         for (id, path) in candidates {
-            let Ok(checksum) = sha256_file(Path::new(&path)) else {
+            let Ok(checksum) = sha256_file_async(Path::new(&path)).await else {
                 continue;
             };
             if let Some(record) = self
@@ -488,6 +488,13 @@ fn sha256_file(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+async fn sha256_file_async(path: &Path) -> Result<String, String> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || sha256_file(&path))
+        .await
+        .map_err(|error| format!("Checksum worker failed: {error}"))?
 }
 
 #[cfg(test)]
