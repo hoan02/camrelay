@@ -88,6 +88,16 @@ a { color: inherit; text-decoration: none; }
 .token-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--cr-ink-500); }
 .token-state.enabled { color: var(--cr-signal); }.token-state.enabled i { background: var(--cr-signal); }
 .token-actions { display: flex; gap: 12px; }.text-button.danger { color: var(--cr-amber); }
+.user-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.user-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 13px; padding: 17px 19px; }
+.user-card h2 { margin: 0 0 5px; font-size: 13px; }
+.user-card small { color: var(--cr-ink-400); font: 9px "DM Mono", monospace; }
+.user-avatar { background: var(--cr-signal-soft); color: var(--cr-signal); }
+.user-role { padding: 7px 9px; border: 1px solid var(--cr-ink-600); border-radius: 999px; color: var(--cr-ink-400); font: 9px "DM Mono", monospace; text-transform: uppercase; }
+.user-role.owner { color: var(--cr-signal); border-color: color-mix(in srgb, var(--cr-signal) 35%, var(--cr-ink-600)); }
+.form-grid select { width: 100%; min-width: 0; border: 1px solid var(--cr-ink-600); border-radius: 9px; background: var(--cr-ink-950); color: var(--cr-ink-100); outline: none; padding: 11px 12px; font-size: 11px; }
+.form-grid select:focus { border-color: var(--cr-signal); box-shadow: 0 0 0 3px var(--cr-signal-soft); }
+@media (max-width: 700px) { .user-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
   .about-grid { grid-template-columns: 1fr; }
   .about-wide { grid-column: auto; }

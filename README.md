@@ -52,6 +52,7 @@ flowchart LR
 - Direct browser routes for login, dashboard, cameras, providers, tokens, settings, and technical guide.
 - Dark/light theme, English/Vietnamese interface, and responsive control-room layout.
 - Separate platform credentials from camera RTSP credentials in the setup flow.
+- Owner-only user administration with role summaries and Argon2id password creation in SQLite mode.
 - Provider probe before a camera can be added; the probe validates provider signaling only.
 - Auto-start for cameras with `auto_start: true`.
 - Brand-specific P2P server and app credentials.
@@ -105,6 +106,7 @@ The web manager has these browser routes:
 | `/recordings` | Closed-segment browser playback and archive status. |
 | `/providers` | Platform provider profiles and provider probe. |
 | `/tokens` | API token management. |
+| `/users` | Owner-only appliance user and role management. |
 | `/settings` | Language and dark/light theme. |
 | `/about` | Architecture, protocol, security, and compatibility notes. |
 

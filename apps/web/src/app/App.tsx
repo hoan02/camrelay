@@ -29,6 +29,7 @@ const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/providers", label: "nav.providers", icon: "settings" },
   { to: "/recordings", label: "nav.recordings", icon: "archive" },
   { to: "/tokens", label: "nav.tokens", icon: "settings" },
+  { to: "/users", label: "nav.users", icon: "settings" },
 ];
 
 type Theme = "dark" | "light";
@@ -53,6 +54,7 @@ export function App() {
       <Route path="providers" element={<Providers />} />
       <Route path="recordings" element={<Recordings />} />
       <Route path="tokens" element={<Tokens />} />
+      <Route path="users" element={<Users />} />
       <Route path="settings" element={<Settings />} />
       <Route path="about" element={<AboutPage />} />
     </Route>
@@ -190,6 +192,23 @@ function Tokens() {
   return <><PageHeading eyebrow="ACCESS CONTROL" title="API tokens" description="Create scoped service credentials for Frigate, FFmpeg, and other trusted clients." /><section className="panel token-create"><div><span className="eyebrow">{t("tokens.newCredential")}</span><h2>{t("tokens.createTitle")}</h2><p>{t("tokens.createDescription")}</p></div><div className="token-create-form"><input value={name} onChange={event => setName(event.target.value)} placeholder={t("tokens.namePlaceholder")} aria-label={t("tokens.nameLabel")} /><button className="primary-button compact" onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}>{t("tokens.create")}</button></div>{newSecret && <div className="token-secret"><span>{t("tokens.copyNow")}</span><code>{newSecret}</code><button className="text-button" onClick={() => navigator.clipboard?.writeText(newSecret)}>{t("tokens.copy")}</button></div>}{create.error && <p className="form-error">{create.error instanceof ApiError ? create.error.message : t("tokens.couldNotCreate")}</p>}</section>{isLoading && <div className="panel loading-panel">{t("tokens.loading")}</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>{t("tokens.apiUnavailable")}</h2><p>{t("tokens.apiUnavailableDescription")}</p></div>}{tokens && tokens.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>{t("tokens.emptyTitle")}</h2><p>{t("tokens.emptyDescription")}</p></div>}{tokens && tokens.length > 0 && <div className="token-grid">{tokens.map(token => <article className="panel token-card" key={token.id}><div><h2>{token.name}</h2><small>{token.expires_at ? `${t("tokens.expires")} ${formatDate(token.expires_at)}` : t("tokens.noExpiry")}</small></div><span className={`token-state ${token.enabled ? "enabled" : "disabled"}`}><i />{token.enabled ? t("tokens.enabled") : t("tokens.disabled")}</span><div className="token-actions"><button className="text-button" onClick={() => toggle.mutate({ id: token.id, enabled: !token.enabled })} disabled={toggle.isPending}>{token.enabled ? t("tokens.disable") : t("tokens.enable")}</button><button className="text-button danger" onClick={() => { if (window.confirm(t("tokens.revokeConfirm"))) remove.mutate(token.id); }} disabled={remove.isPending}>{t("tokens.revoke")}</button></div></article>)}</div>}</>;
 }
 
+function Users() {
+  const { t } = useLocale();
+  const { data: users, isLoading, isError } = useQuery({ queryKey: ["users"], queryFn: api.users });
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const mutation = useMutation({ mutationFn: api.createUser, onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["users"] }); setOpen(false); } });
+  return <><PageHeading eyebrow="ADMINISTRATION" title="Users" description="Manage appliance identities and roles without exposing password material." action={<button className="primary-button compact" onClick={() => setOpen(true)}><Icon name="plus" size={16} />{t("users.add")}</button>} />{isLoading && <div className="panel loading-panel">{t("users.loading")}</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>{t("users.apiUnavailable")}</h2><p>{t("users.apiUnavailableDescription")}</p></div>}{users && users.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>{t("users.emptyTitle")}</h2><p>{t("users.emptyDescription")}</p><button className="secondary-button" onClick={() => setOpen(true)}><Icon name="plus" size={15} />{t("users.addFirst")}</button></div>}{users && users.length > 0 && <div className="user-grid">{users.map(user => <article className="panel user-card" key={user.username}><div className="avatar user-avatar">{user.username.slice(0, 1).toUpperCase()}</div><div><h2>{user.username}</h2><small>{t("users.created")} {formatDate(user.created_at)}</small></div><span className={`user-role ${user.role}`}>{user.role}</span></article>)}</div>}{open && <UserDialog busy={mutation.isPending} error={mutation.error instanceof ApiError ? mutation.error.message : mutation.error ? t("users.createFailed") : ""} onClose={() => { setOpen(false); mutation.reset(); }} onSubmit={input => mutation.mutate(input)} />}</>;
+}
+
+function UserDialog({ busy, error, onClose, onSubmit }: { busy: boolean; error: string; onClose: () => void; onSubmit: (input: { username: string; password: string; role: string }) => void }) {
+  const { t } = useLocale();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("viewer");
+  return <div className="dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title"><div className="dialog-heading"><div><span className="eyebrow">{t("page.users.eyebrow")}</span><h2 id="user-dialog-title">{t("users.createTitle")}</h2><p>{t("users.createDescription")}</p></div><button className="icon-button" onClick={onClose} aria-label={t("common.close")}>×</button></div><div className="form-grid"><label>{t("users.username")}<input value={username} onChange={event => setUsername(event.target.value)} placeholder={t("users.usernamePlaceholder")} autoFocus /></label><label>{t("users.password")}<input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder={t("users.passwordPlaceholder")} /></label><label>{t("users.role")}<select value={role} onChange={event => setRole(event.target.value)}><option value="admin">{t("users.roleAdmin")}</option><option value="operator">{t("users.roleOperator")}</option><option value="viewer">{t("users.roleViewer")}</option></select></label></div>{error && <p className="form-error dialog-error">{error}</p>}<div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={busy || !username.trim() || password.length < 8} onClick={() => onSubmit({ username: username.trim(), password, role })}>{busy ? t("common.saving") : t("users.create")}</button></div></section></div>;
+}
+
 function Providers() {
   const { t } = useLocale();
   const { data: providers, isLoading, isError } = useQuery({ queryKey: ["providers"], queryFn: api.providers });
@@ -242,6 +261,7 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow: string;
     "P2P PROFILES|Providers": ["HỒ SƠ P2P", "Nhà cung cấp", "Hồ sơ signaling của relay. Secret ở lại trên máy chủ; khả năng tương thích cần được kiểm thử thực tế."],
     "MEDIA LIBRARY|Recordings": ["THƯ VIỆN MEDIA", "Bản ghi", "Các phân đoạn đã đóng, thời hạn lưu cục bộ và lộ trình lên cloud."],
     "ACCESS CONTROL|API tokens": ["KIỂM SOÁT TRUY CẬP", "API token", "Tạo thông tin truy cập dịch vụ cho Frigate, FFmpeg và các client tin cậy khác."],
+    "ADMINISTRATION|Users": ["QUẢN TRỊ", "Người dùng", "Quản lý identity và role của appliance mà không lộ password."],
   } as Record<string, [string, string, string]>)[`${eyebrow}|${title}`] : undefined;
   const copy = localized ?? [eyebrow, title, description];
   return <div className="page-heading"><div><span className="eyebrow">{copy[0]}</span><h1>{copy[1]}</h1><p>{copy[2]}</p></div>{action}</div>;

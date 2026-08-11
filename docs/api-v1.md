@@ -55,6 +55,8 @@ Implemented in the current migration checkpoint:
     POST   /api/v1/auth/refresh
     POST   /api/v1/auth/logout
     GET    /api/v1/me
+    GET    /api/v1/users                 owner-only, secret-free user summaries
+    POST   /api/v1/users                 owner-only user creation
 
 The endpoints below remain pending until their media/event transport is
 implemented and tested end to end:

@@ -89,6 +89,13 @@ pub struct ApiTokenSummary {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct UserSummary {
+    pub username: String,
+    pub role: String,
+    pub created_at: String,
+}
+
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
         Self { items, next_cursor }

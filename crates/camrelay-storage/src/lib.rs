@@ -186,6 +186,38 @@ impl Storage {
         )
     }
 
+    pub async fn list_users(&self) -> Result<Vec<StoredUser>, StorageError> {
+        let rows = sqlx::query("SELECT username, role, created_at FROM users ORDER BY username")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(StoredUser {
+                    username: row.try_get("username")?,
+                    role: row.try_get("role")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn create_user(
+        &self,
+        username: &str,
+        password: &str,
+        role: &str,
+    ) -> Result<(), StorageError> {
+        let password_hash = hash_password(password)?;
+        sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)")
+            .bind(format!("user-{}", rand::random::<u128>()))
+            .bind(username)
+            .bind(password_hash)
+            .bind(role)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn import_legacy(
         &self,
         snapshot: &LegacySnapshot,
@@ -549,6 +581,13 @@ pub struct StoredApiToken {
     pub token: String,
     pub expires_at: Option<String>,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredUser {
+    pub username: String,
+    pub role: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

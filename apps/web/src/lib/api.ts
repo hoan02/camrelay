@@ -54,6 +54,7 @@ export type ProviderInput = {
 
 export type Tunnel = { id: string; status: string };
 export type ApiToken = { id: string; name: string; expires_at: string | null; enabled: boolean };
+export type UserSummary = { username: string; role: string; created_at: string };
 export type CameraDiagnostics = {
   camera_id: string;
   provider: string;
@@ -143,4 +144,6 @@ export const api = {
   createToken: (input: { name: string; expires_at: string | null; enabled: boolean }) => request<ApiToken & { token: string }>("/api/v1/tokens", { method: "POST", body: JSON.stringify(input) }),
   updateToken: (id: string, input: Partial<Pick<ApiToken, "name" | "expires_at" | "enabled">>) => request<ApiToken>(`/api/v1/tokens/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteToken: (id: string) => request<void>(`/api/v1/tokens/${id}`, { method: "DELETE" }),
+  users: () => request<UserSummary[]>("/api/v1/users"),
+  createUser: (input: { username: string; password: string; role: string }) => request<UserSummary>("/api/v1/users", { method: "POST", body: JSON.stringify(input) }),
 };

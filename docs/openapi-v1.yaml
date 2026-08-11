@@ -68,6 +68,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Principal'
+  /api/v1/users:
+    get:
+      summary: List appliance users
+      description: Owner-only secret-free user summaries.
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserSummary'
+        '403':
+          description: Owner role required
+    post:
+      summary: Create an appliance user
+      description: Owner-only; new users may be admin, operator, or viewer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInput'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '409':
+          description: User already exists or SQLite is required
   /api/v1/cameras:
     get:
       summary: List secret-free cameras
@@ -333,6 +366,20 @@ components:
         username: { type: string }
         role: { type: string, enum: [owner, admin, operator, viewer] }
         auth_type: { type: string, enum: [session, token] }
+    UserSummary:
+      type: object
+      required: [username, role, created_at]
+      properties:
+        username: { type: string }
+        role: { type: string, enum: [owner, admin, operator, viewer] }
+        created_at: { type: string }
+    UserInput:
+      type: object
+      required: [username, password, role]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 128 }
+        password: { type: string, format: password, minLength: 8 }
+        role: { type: string, enum: [admin, operator, viewer] }
     Health:
       type: object
       required: [api_version, status, storage, camera_count]

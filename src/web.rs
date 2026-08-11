@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, Request, State},
+    extract::{Extension, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -25,7 +25,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 use camrelay_contract::{
-    ApiTokenSummary, CameraSummary, ProviderSummary, RecordingSummary, API_VERSION,
+    ApiTokenSummary, CameraSummary, ProviderSummary, RecordingSummary, UserSummary, API_VERSION,
 };
 use camrelay_storage::{LegacyCamera, Storage, StoredCameraConfig, StoredProviderConfig};
 
@@ -258,6 +258,152 @@ async fn current_user(State(state): State<AppState>, headers: HeaderMap) -> impl
         .await
         .map(|principal| Json(principal).into_response())
         .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+}
+
+fn owner_required(principal: &AuthPrincipal) -> Option<Response> {
+    if principal.role == "owner" {
+        None
+    } else {
+        Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "code": "users.owner_required",
+                    "message": "Only the appliance owner can manage users."
+                })),
+            )
+                .into_response(),
+        )
+    }
+}
+
+async fn get_v1_users(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+) -> Response {
+    if let Some(response) = owner_required(&principal) {
+        return response;
+    }
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "users.sqlite_required",
+                "message": "User administration requires SQLite mode."
+            })),
+        )
+            .into_response();
+    };
+    match storage.list_users().await {
+        Ok(users) => Json(
+            users
+                .into_iter()
+                .map(|user| UserSummary {
+                    username: user.username,
+                    role: user.role,
+                    created_at: user.created_at,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "users.load_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UserPayload {
+    username: String,
+    password: String,
+    role: String,
+}
+
+fn user_role_is_valid(role: &str) -> bool {
+    matches!(role, "admin" | "operator" | "viewer")
+}
+
+async fn create_v1_user(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Json(body): Json<UserPayload>,
+) -> Response {
+    if let Some(response) = owner_required(&principal) {
+        return response;
+    }
+    let username = body.username.trim();
+    if username.is_empty()
+        || username.len() > 128
+        || body.password.len() < 8
+        || !user_role_is_valid(&body.role)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "users.invalid_input",
+                "message": "Username, a password of at least 8 characters, and a valid non-owner role are required."
+            })),
+        )
+            .into_response();
+    }
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "users.sqlite_required",
+                "message": "User administration requires SQLite mode."
+            })),
+        )
+            .into_response();
+    };
+    if let Err(error) = storage
+        .create_user(username, &body.password, &body.role)
+        .await
+    {
+        let status = if error.to_string().contains("UNIQUE") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return (
+            status,
+            Json(serde_json::json!({
+                "code": "users.create_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response();
+    }
+    match storage.list_users().await {
+        Ok(users) => users
+            .into_iter()
+            .find(|user| user.username == username)
+            .map(|user| {
+                (
+                    StatusCode::CREATED,
+                    Json(UserSummary {
+                        username: user.username,
+                        role: user.role,
+                        created_at: user.created_at,
+                    }),
+                )
+                    .into_response()
+            })
+            .unwrap_or_else(|| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "users.load_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response(),
+    }
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
@@ -2056,6 +2202,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/auth/logout", post(logout))
         .route("/me", get(current_user));
     let v1_protected = Router::new()
+        .route("/users", get(get_v1_users).post(create_v1_user))
         .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
         .route(
             "/cameras/:id",
