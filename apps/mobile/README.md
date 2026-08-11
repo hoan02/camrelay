@@ -17,7 +17,8 @@ administrative web console.
 The first scaffold uses Flutter Material 3 with the Camrelay signal-room color
 language. The API client follows `docs/openapi-v1.yaml`; it does not call the
 legacy `/api` surface. It includes camera lifecycle, recording playback
-tickets, the credential-free HLS live-ticket contract, and a ticket-backed
+tickets, the credential-free, protocol-aware live-ticket contract (HLS is the
+current adapter), and a ticket-backed
 `video_player` surface for live and recorded playback. Use `resolveUrl()` only
 to turn the API's relative ticket URL into the appliance URL; the bearer token
 remains in secure storage and is never appended to the media URL.

@@ -5,6 +5,8 @@
 //! are short-lived segments under the configured live directory and are
 //! served through expiring, scoped tickets by the HTTP layer.
 
+pub const HLS_PROTOCOL: &str = "hls";
+
 use std::{
     collections::HashMap,
     fs,
@@ -38,6 +40,22 @@ impl LiveManager {
         &self.config
     }
 
+    /// Returns the configured transport name in the stable form used by the
+    /// API ticket envelope. The string remains forward-compatible so a future
+    /// gateway can add WebRTC without changing the client-facing shape.
+    pub fn protocol(&self) -> String {
+        let protocol = self.config.live_protocol.trim();
+        if protocol.is_empty() {
+            HLS_PROTOCOL.to_string()
+        } else {
+            protocol.to_ascii_lowercase()
+        }
+    }
+
+    pub fn protocol_available(&self) -> bool {
+        self.protocol() == HLS_PROTOCOL
+    }
+
     pub fn is_running(&self, camera_id: &str) -> bool {
         let mut processes = self.processes.lock().unwrap();
         let Some(child) = processes.get_mut(camera_id) else {
@@ -55,8 +73,14 @@ impl LiveManager {
     pub async fn start(&self, camera: Camera) -> Result<(), String> {
         if !self.config.live_enabled {
             return Err(
-                "Live HLS is disabled in config.json (set live_enabled to true).".to_string(),
+                "Live media is disabled in config.json (set live_enabled to true).".to_string(),
             );
+        }
+        if !self.protocol_available() {
+            return Err(format!(
+                "Live protocol '{}' is not available; use 'hls' until another gateway is implemented.",
+                self.protocol()
+            ));
         }
         if !safe_component(&camera.id) {
             return Err("Camera id is not safe for a live segment directory.".to_string());
@@ -129,4 +153,29 @@ fn safe_component(value: &str) -> bool {
         && !value.contains('\\')
         && value != "."
         && value != ".."
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_live_gateway_is_hls() {
+        let manager = LiveManager::new(AppConfig::default(), RtspProxyManager::new());
+
+        assert_eq!(manager.protocol(), HLS_PROTOCOL);
+        assert!(manager.protocol_available());
+    }
+
+    #[test]
+    fn unsupported_live_gateway_is_reported_without_fallback() {
+        let config = AppConfig {
+            live_protocol: "webrtc".to_string(),
+            ..AppConfig::default()
+        };
+        let manager = LiveManager::new(config, RtspProxyManager::new());
+
+        assert_eq!(manager.protocol(), "webrtc");
+        assert!(!manager.protocol_available());
+    }
 }

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, Camera, CameraDiagnostics, CameraInput, ProviderInput } from "../lib/api";
+import { api, ApiError, Camera, CameraDiagnostics, CameraInput, LiveTicket, ProviderInput } from "../lib/api";
 import { Locale, translate } from "../lib/i18n";
 
 type IconName = "grid" | "camera" | "archive" | "settings" | "info" | "plus" | "arrow" | "sun" | "moon" | "logout" | "menu" | "activity";
@@ -267,16 +267,24 @@ function formatBytes(value: number) { if (!value) return "—"; if (value < 1024
 function CameraCard({ camera, status, busy, onToggle, onDelete }: { camera: Camera; status: string; busy: boolean; onToggle: () => void; onDelete?: () => void }) {
   const { t } = useLocale();
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const [liveUrl, setLiveUrl] = useState<string | null>(null);
+  const [liveTicket, setLiveTicket] = useState<LiveTicket | null>(null);
+  const [liveProtocolError, setLiveProtocolError] = useState(false);
   const liveVideo = useRef<HTMLVideoElement>(null);
   const diagnostics = useQuery({
     queryKey: ["camera-diagnostics", camera.id],
     queryFn: () => api.cameraDiagnostics(camera.id),
     enabled: diagnosticsOpen,
   });
-  const live = useMutation({ mutationFn: () => api.liveTicket(camera.id), onSuccess: ticket => setLiveUrl(ticket.url) });
+  const live = useMutation({
+    mutationFn: () => api.liveTicket(camera.id),
+    onSuccess: ticket => {
+      setLiveProtocolError(ticket.protocol !== "hls");
+      setLiveTicket(ticket.protocol === "hls" ? ticket : null);
+    },
+  });
   const running = status === "running";
-  useEffect(() => { if (!running) setLiveUrl(null); }, [running]);
+  const liveUrl = liveTicket?.url ?? null;
+  useEffect(() => { if (!running) { setLiveTicket(null); setLiveProtocolError(false); } }, [running]);
   useEffect(() => {
     const video = liveVideo.current;
     if (!video || !liveUrl) return;
@@ -298,7 +306,7 @@ function CameraCard({ camera, status, busy, onToggle, onDelete }: { camera: Came
     };
   }, [liveUrl]);
   return <>
-    <article className="camera-card"><div className="camera-preview">{liveUrl ? <video ref={liveVideo} className="camera-live-player" controls autoPlay muted playsInline onError={() => setLiveUrl(null)} /> : <><span className="preview-label">{t("camera.noPreview")}</span><span className="preview-grid" /></>}<span className={`camera-live-badge ${running ? "is-running" : ""}`}><i />{status}</span></div><div className="camera-body"><div className="camera-title"><span className={`camera-status ${running ? "is-running" : ""}`} /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div>{onDelete && <button className="icon-button subtle" title={t("common.delete")} onClick={onDelete} disabled={busy}>×</button>}</div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? t("common.autoStart") : t("common.manualStart")}</span></div><div className="camera-actions"><button className="secondary-button compact" onClick={onToggle} disabled={busy}>{running ? t("common.stopRelay") : t("common.startRelay")}</button><button className="primary-button compact" onClick={() => live.mutate()} disabled={!running || live.isPending}>{t("camera.live")}</button><button className="text-button" onClick={() => setDiagnosticsOpen(true)}>{t("camera.diagnostics")}</button></div>{live.error && <p className="form-error">{live.error instanceof ApiError ? live.error.message : t("camera.liveFailed")}</p>}</div></article>
+    <article className="camera-card"><div className="camera-preview">{liveUrl ? <video ref={liveVideo} className="camera-live-player" controls autoPlay muted playsInline onError={() => setLiveTicket(null)} /> : <><span className="preview-label">{t("camera.noPreview")}</span><span className="preview-grid" /></>}<span className={`camera-live-badge ${running ? "is-running" : ""}`}><i />{status}</span></div><div className="camera-body"><div className="camera-title"><span className={`camera-status ${running ? "is-running" : ""}`} /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div>{onDelete && <button className="icon-button subtle" title={t("common.delete")} onClick={onDelete} disabled={busy}>×</button>}</div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? t("common.autoStart") : t("common.manualStart")}</span></div><div className="camera-actions"><button className="secondary-button compact" onClick={onToggle} disabled={busy}>{running ? t("common.stopRelay") : t("common.startRelay")}</button><button className="primary-button compact" onClick={() => live.mutate()} disabled={!running || live.isPending}>{t("camera.live")}</button><button className="text-button" onClick={() => setDiagnosticsOpen(true)}>{t("camera.diagnostics")}</button></div>{live.error && <p className="form-error">{live.error instanceof ApiError ? live.error.message : t("camera.liveFailed")}</p>}{liveProtocolError && <p className="form-error">{t("camera.liveProtocolUnsupported")}</p>}</div></article>
     {diagnosticsOpen && <CameraDiagnosticsDialog diagnostics={diagnostics.data} loading={diagnostics.isLoading} error={diagnostics.isError} onClose={() => setDiagnosticsOpen(false)} />}
   </>;
 }
@@ -346,7 +354,8 @@ function Settings() {
           {mediaError && <p className="form-error">{t("settings.media.unavailableDescription")}</p>}
           {media && <div className="media-facts">
             <div><span>{t("settings.media.recording")}</span><strong>{stateLabel(media.enabled)}</strong></div>
-            <div><span>{t("settings.media.live")}</span><strong>{stateLabel(media.live_enabled)}</strong></div>
+            <div><span>{t("settings.media.live")}</span><strong>{stateLabel(media.live_enabled && media.live_protocol_available)}</strong></div>
+            <div><span>{t("settings.media.protocol")}</span><strong>{media.live_protocol.toUpperCase()}</strong></div>
             <div><span>{t("settings.media.archive")}</span><strong>{media.archive_enabled && media.archive_configured ? t("settings.media.configured") : t("settings.media.notConfigured")}</strong></div>
             <div><span>{t("settings.media.verification")}</span><strong>{media.archive_verify ? t("settings.media.ready") : t("settings.media.off")}</strong></div>
             <div><span>{t("settings.media.segment")}</span><strong>{media.segment_seconds + "s"}</strong></div>

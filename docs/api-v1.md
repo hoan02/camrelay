@@ -100,9 +100,12 @@ the bearer token returned by login or token creation. The refresh endpoint rotat
 server-side session tokens; logout revokes the SQLite session and clears the cookie.
 
 When `live_enabled` is true and a camera relay is running, the live-ticket
-endpoint starts a local FFmpeg HLS process and returns a 15-minute URL scoped to
-one camera. FFmpeg reads a loopback RTSP credential proxy; camera credentials do
-not appear in the FFmpeg command line or leave camrelay for a sidecar service.
+endpoint starts the configured media gateway and returns a 15-minute,
+camera-scoped ticket envelope. The current gateway protocol is `hls`; clients
+must branch on `protocol` and show a clear unsupported-state for adapters they
+do not implement. FFmpeg reads a loopback RTSP credential proxy; camera
+credentials do not appear in the FFmpeg command line or leave camrelay for a
+sidecar service.
 
 Provider names are immutable after creation because camera records reference the
 provider by name. A provider in use by a camera cannot be deleted.

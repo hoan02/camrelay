@@ -20,6 +20,12 @@ The HLS worker receives an RTSP URL pointing at the loopback proxy. It never
 receives the camera username/password and no sidecar is trusted with those
 secrets.
 
+`config.json` selects the gateway with `live_protocol`. Use `hls` for the
+currently implemented adapter. An unsupported value is exposed in the
+read-only media capability response and live-ticket requests fail with a
+specific `live.protocol_unavailable` error; Camrelay does not silently fall
+back to a different protocol.
+
 ## Gateway boundary
 
 Any future WebRTC gateway must accept only a credential-free local source:
@@ -45,7 +51,10 @@ The existing live response is intentionally transport-shaped:
 }
 ```
 
-Clients must branch on `protocol` and ignore fields they do not understand.
+Clients must branch on `protocol` and ignore fields they do not understand. The
+current web and mobile clients support `hls` plus HTTP playback tickets; an
+unknown protocol is surfaced as an unsupported adapter instead of being passed
+to an HLS player by accident.
 The HLS URL is a short-lived, camera-scoped media ticket; the API bearer is
 not appended to it. A future WebRTC response may use the same envelope with a
 WebRTC signaling URL and scoped ticket metadata, but it must be added to the

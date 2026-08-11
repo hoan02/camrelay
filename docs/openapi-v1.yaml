@@ -195,8 +195,8 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CameraId'
     post:
-      summary: Issue a scoped HLS live ticket
-      description: Starts the local HLS worker when enabled and returns a camera-scoped URL.
+      summary: Issue a scoped live media ticket
+      description: Starts the configured live gateway when enabled and returns a camera-scoped ticket. The current supported protocol is HLS; clients must branch on the protocol field for future adapters.
       responses:
         '200':
           description: Live ticket
@@ -543,7 +543,10 @@ components:
       type: object
       required: [protocol, url, expires_in_seconds]
       properties:
-        protocol: { type: string, enum: [hls] }
+        protocol:
+          type: string
+          enum: [hls]
+          description: Current live gateway protocol. Future adapters must preserve this ticket envelope.
         url: { type: string }
         expires_in_seconds: { type: integer, minimum: 1 }
     PlaybackTicket:
@@ -569,10 +572,14 @@ components:
         archive_verified: { type: boolean }
     RecordingConfig:
       type: object
-      required: [enabled, live_enabled, archive_enabled, archive_verify, archive_configured, segment_seconds, local_retention_days, ffmpeg_path, checksum_algorithm]
+      required: [enabled, live_enabled, live_protocol, live_protocol_available, archive_enabled, archive_verify, archive_configured, segment_seconds, local_retention_days, ffmpeg_path, checksum_algorithm]
       properties:
         enabled: { type: boolean }
         live_enabled: { type: boolean }
+        live_protocol:
+          type: string
+          description: Configured live gateway protocol. `hls` is the supported value today; another value is reported as unavailable until its adapter is implemented.
+        live_protocol_available: { type: boolean }
         archive_enabled: { type: boolean }
         archive_verify: { type: boolean }
         archive_configured: { type: boolean }

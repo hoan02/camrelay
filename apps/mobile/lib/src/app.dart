@@ -204,6 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
           loadTicket: () async {
             final ticket = await widget.api.liveTicket(camera.id);
             return MediaTicketData(
+              protocol: ticket.protocol,
               url: widget.api.resolveUrl(ticket.url),
               expiresInSeconds: ticket.expiresInSeconds,
             );
@@ -221,6 +222,7 @@ class _HomeScreenState extends State<HomeScreen> {
           loadTicket: () async {
             final ticket = await widget.api.playbackTicket(recording.id);
             return MediaTicketData(
+              protocol: 'http',
               url: widget.api.resolveUrl(ticket.url),
               expiresInSeconds: ticket.expiresInSeconds,
             );

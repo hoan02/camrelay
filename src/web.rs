@@ -2132,6 +2132,8 @@ async fn get_recording_handler(
 struct RecordingConfigResponse {
     enabled: bool,
     live_enabled: bool,
+    live_protocol: String,
+    live_protocol_available: bool,
     archive_enabled: bool,
     archive_verify: bool,
     archive_configured: bool,
@@ -2146,6 +2148,8 @@ fn recording_config_response(state: &AppState) -> RecordingConfigResponse {
     RecordingConfigResponse {
         enabled: config.recordings_enabled,
         live_enabled: config.live_enabled,
+        live_protocol: state.live_manager.protocol(),
+        live_protocol_available: state.live_manager.protocol_available(),
         archive_enabled: config.archive_enabled,
         archive_verify: config.archive_verify,
         archive_configured: !config.archive_remote.trim().is_empty(),
@@ -2215,7 +2219,7 @@ async fn issue_playback_ticket(
 
 #[derive(Serialize)]
 struct LiveTicketResponse {
-    protocol: &'static str,
+    protocol: String,
     url: String,
     expires_in_seconds: u64,
 }
@@ -2233,7 +2237,17 @@ async fn issue_live_ticket(
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "code": "live.disabled",
-                "message": "Live HLS is disabled in config.json."
+                "message": "Live media is disabled in config.json."
+            })),
+        )
+            .into_response();
+    }
+    if !state.live_manager.protocol_available() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "live.protocol_unavailable",
+                "message": "The configured live protocol is not available yet. Set live_protocol to hls."
             })),
         )
             .into_response();
@@ -2291,7 +2305,7 @@ async fn issue_live_ticket(
     (
         StatusCode::OK,
         Json(LiveTicketResponse {
-            protocol: "hls",
+            protocol: state.live_manager.protocol(),
             url: format!("/api/v1/live/{ticket}/index.m3u8"),
             expires_in_seconds,
         }),

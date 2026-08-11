@@ -28,6 +28,9 @@ fn default_web_root() -> String {
 fn default_live_dir() -> String {
     "live".to_string()
 }
+fn default_live_protocol() -> String {
+    "hls".to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
@@ -42,6 +45,8 @@ pub struct AppConfig {
     pub live_enabled: bool,
     #[serde(default = "default_live_dir")]
     pub live_dir: String,
+    #[serde(default = "default_live_protocol")]
+    pub live_protocol: String,
     #[serde(default = "default_recordings_dir")]
     pub recordings_dir: String,
     #[serde(default = "default_recordings_index")]
@@ -78,6 +83,7 @@ impl Default for AppConfig {
             recordings_enabled: false,
             live_enabled: false,
             live_dir: default_live_dir(),
+            live_protocol: default_live_protocol(),
             recordings_dir: default_recordings_dir(),
             recordings_index: default_recordings_index(),
             segment_seconds: default_segment_seconds(),

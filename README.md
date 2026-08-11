@@ -58,6 +58,7 @@ flowchart LR
 - Brand-specific P2P server and app credentials.
 - SQLite v1 persistence with encrypted provider/camera secrets, Argon2id user passwords, refresh sessions, RBAC, and idempotent import from legacy JSON files.
 - Optional local HLS live preview through FFmpeg and a loopback-only RTSP credential proxy; camera secrets do not enter the FFmpeg command line or a sidecar service.
+- Live playback uses a transport-shaped ticket contract. HLS is the supported gateway today; web and mobile clients reject unknown protocols explicitly so a future WebRTC adapter can be added without changing navigation or credential boundaries.
 - Direct and relay handshake paths in the Rust implementation, subject to device/cloud support.
 
 ### Not yet promised
@@ -245,6 +246,7 @@ Enable recording in config.json:
       "recordings_enabled": true,
       "live_enabled": true,
       "live_dir": "live",
+      "live_protocol": "hls",
       "recordings_dir": "recordings",
       "recordings_index": "recordings.json",
       "segment_seconds": 300,

@@ -42,6 +42,8 @@ export type Recording = {
 export type RecordingConfig = {
   enabled: boolean;
   live_enabled: boolean;
+  live_protocol: string;
+  live_protocol_available: boolean;
   archive_enabled: boolean;
   archive_configured: boolean;
   archive_verify: boolean;
@@ -52,7 +54,7 @@ export type RecordingConfig = {
 };
 
 export type PlaybackTicket = { url: string; expires_in_seconds: number };
-export type LiveTicket = { protocol: "hls"; url: string; expires_in_seconds: number };
+export type LiveTicket = { protocol: string; url: string; expires_in_seconds: number };
 
 export type Provider = {
   id: string;

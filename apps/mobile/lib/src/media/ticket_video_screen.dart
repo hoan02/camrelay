@@ -4,8 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 class MediaTicketData {
-  const MediaTicketData({required this.url, required this.expiresInSeconds});
+  const MediaTicketData({
+    required this.protocol,
+    required this.url,
+    required this.expiresInSeconds,
+  });
 
+  final String protocol;
   final String url;
   final int expiresInSeconds;
 }
@@ -54,6 +59,11 @@ class _TicketVideoScreenState extends State<TicketVideoScreen> {
 
     try {
       final ticket = await widget.loadTicket();
+      final protocol = ticket.protocol.toLowerCase();
+      if (protocol != 'hls' && protocol != 'http' && protocol != 'https') {
+        throw UnsupportedError(
+            'The mobile player does not support the $protocol live adapter yet.');
+      }
       final controller =
           VideoPlayerController.networkUrl(Uri.parse(ticket.url));
       await controller.initialize();
