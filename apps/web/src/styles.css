@@ -113,13 +113,27 @@ a { color: inherit; text-decoration: none; }
 .panel-description { margin: 8px 0 0; color: var(--cr-ink-400); font-size: 10px; line-height: 1.5; max-width: 420px; }
 .dashboard-wall-grid { margin-top: 20px; }
 .wall-empty { min-height: 110px; display: grid; place-items: center; color: var(--cr-ink-400); font-size: 11px; }
+.activity-list { display: grid; gap: 2px; margin-top: 18px; }
+.activity-row { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: start; padding: 11px 0; border-bottom: 1px solid color-mix(in srgb, var(--cr-ink-600) 55%, transparent); }
+.activity-row:last-child { border-bottom: 0; }
+.activity-icon { width: 30px; height: 30px; display: grid; place-items: center; color: var(--cr-signal); border-radius: 10px; background: var(--cr-signal-soft); }
+.activity-copy { min-width: 0; }
+.activity-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.activity-copy p { margin: 4px 0; overflow: hidden; color: var(--cr-ink-300); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.activity-copy small { color: var(--cr-ink-500); font: 9px "DM Mono", monospace; }
+.activity-severity { align-self: center; color: var(--cr-signal); font: 9px "DM Mono", monospace; text-transform: uppercase; }
+.activity-row.warning .activity-icon, .activity-row.error .activity-icon { color: var(--cr-amber); background: color-mix(in srgb, var(--cr-amber) 12%, transparent); }
+.activity-row.warning .activity-severity, .activity-row.error .activity-severity { color: var(--cr-amber); }
+.activity-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; color: var(--cr-signal); font-size: 10px; font-weight: 700; }
+.activity-state { min-height: 210px; display: grid; place-items: center; color: var(--cr-ink-400); font-size: 11px; }
+.compact-empty { min-height: 250px; padding-top: 35px; }
 .recording-toolbar { margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .recording-toolbar p { margin: 8px 0 0; color: var(--cr-ink-400); font-size: 10px; }
 .recording-filters { display: flex; gap: 10px; }
 .recording-filters label { display: grid; gap: 6px; color: var(--cr-ink-400); font-size: 9px; font-weight: 700; }
 .recording-filters select { min-width: 150px; border: 1px solid var(--cr-ink-600); border-radius: 9px; background: var(--cr-ink-950); color: var(--cr-ink-100); outline: none; padding: 10px 11px; font-size: 10px; }
 .recording-filters select:focus { border-color: var(--cr-signal); box-shadow: 0 0 0 3px var(--cr-signal-soft); }
-@media (max-width: 700px) { .recording-toolbar { align-items: stretch; flex-direction: column; } .recording-filters { flex-direction: column; } .recording-filters select { width: 100%; } }
+@media (max-width: 700px) { .recording-toolbar { align-items: stretch; flex-direction: column; } .recording-filters { flex-direction: column; } .recording-filters select { width: 100%; } .activity-row { grid-template-columns: 30px 1fr; } .activity-severity { grid-column: 2; justify-self: start; } }
 
 .audit-list { overflow: hidden; }
 .audit-header, .audit-row { display: grid; grid-template-columns: 1.1fr .8fr .55fr 2fr .45fr; align-items: center; gap: 16px; padding: 14px 18px; }

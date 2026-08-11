@@ -123,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late Future<List<CameraSummary>> _cameras;
   late Future<List<TunnelSummary>> _tunnels;
   late Future<List<RecordingSummary>> _recordings;
+  late Future<List<EventSummary>> _events;
 
   @override
   void initState() {
@@ -135,6 +136,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _cameras = widget.api.cameras();
     _tunnels = widget.api.tunnels();
     _recordings = widget.api.recordings();
+    _events = widget.api.events();
   }
 
   Future<void> _toggle(CameraSummary camera, bool running) async {
@@ -219,9 +221,27 @@ class _HomeScreenState extends State<HomeScreen> {
             if (snapshot.data!.isEmpty) return const _EmptyTile(message: 'No recordings yet.');
             return Column(children: snapshot.data!.take(10).map((recording) => ListTile(title: Text(recording.cameraName), subtitle: Text(recording.startedAt.toLocal().toString()), trailing: Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [Text(recording.status), IconButton(icon: const Icon(Icons.play_circle_outline), tooltip: 'Play recording', onPressed: () => _openRecording(recording))]))).toList());
           }),
+          const SizedBox(height: 24),
+          Text('Recent activity', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 8),
+          FutureBuilder<List<EventSummary>>(future: _events, builder: (context, snapshot) {
+            if (snapshot.hasError) return const _ErrorTile(message: 'Activity API is unavailable.');
+            if (!snapshot.hasData) return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()));
+            if (snapshot.data!.isEmpty) return const _EmptyTile(message: 'No recording/system activity yet.');
+            return Column(children: snapshot.data!.take(5).map((event) {
+              final icon = event.kind.startsWith('recording') ? Icons.video_library_outlined : Icons.bolt_outlined;
+              return ListTile(leading: Icon(icon), title: Text(event.cameraName), subtitle: Text('${event.message}\n${_formatEventTime(context, event.occurredAt)}'), isThreeLine: true, trailing: Text(event.severity));
+            }).toList());
+          }),
         ]),
       ),
     );
+  }
+
+  String _formatEventTime(BuildContext context, DateTime value) {
+    final local = value.toLocal();
+    final localizations = MaterialLocalizations.of(context);
+    return '${localizations.formatShortDate(local)} · ${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(local))}';
   }
 }
 

@@ -11,6 +11,7 @@ administrative web console.
 - rotate an expiring bearer session once through the v1 refresh endpoint;
 - show tunnel state and start/stop controls for authorized users;
 - list recordings and request ticket-protected playback;
+- show normalized recording/system activity from the v1 events endpoint;
 - keep all P2P platform, camera RTSP, and archive credentials on the server.
 
 The first scaffold uses Flutter Material 3 with the Camrelay signal-room color
@@ -43,3 +44,5 @@ deep link.
 - WebRTC remains a future adapter because the backend currently issues HLS
   tickets only;
 - automatic refresh and media playback still need Flutter SDK/device verification on the development machine.
+- the activity feed currently represents persisted recording segments; motion events
+  need a camera/provider event source and are not claimed by this client yet.

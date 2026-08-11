@@ -91,6 +91,39 @@ class RecordingSummary {
       );
 }
 
+class EventSummary {
+  const EventSummary({
+    required this.id,
+    required this.kind,
+    required this.cameraId,
+    required this.cameraName,
+    required this.occurredAt,
+    required this.severity,
+    required this.message,
+    required this.source,
+  });
+
+  final String id;
+  final String kind;
+  final String cameraId;
+  final String cameraName;
+  final DateTime occurredAt;
+  final String severity;
+  final String message;
+  final String source;
+
+  factory EventSummary.fromJson(Map<String, dynamic> json) => EventSummary(
+        id: json['id'] as String? ?? '',
+        kind: json['kind'] as String? ?? 'activity',
+        cameraId: json['camera_id'] as String? ?? '',
+        cameraName: json['camera_name'] as String? ?? '',
+        occurredAt: DateTime.tryParse(json['occurred_at'] as String? ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        severity: json['severity'] as String? ?? 'info',
+        message: json['message'] as String? ?? '',
+        source: json['source'] as String? ?? 'unknown',
+      );
+}
+
 class PlaybackTicket {
   const PlaybackTicket({required this.url, required this.expiresInSeconds});
 

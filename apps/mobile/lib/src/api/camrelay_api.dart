@@ -80,6 +80,11 @@ class CamrelayApi {
     return _list(payload).map(RecordingSummary.fromJson).toList(growable: false);
   }
 
+  Future<List<EventSummary>> events() async {
+    final payload = await _request('GET', '/api/v1/events');
+    return _list(payload).map(EventSummary.fromJson).toList(growable: false);
+  }
+
   Future<void> startCamera(String id) async {
     await _request('POST', '/api/v1/cameras/$id/start');
   }

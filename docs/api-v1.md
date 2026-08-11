@@ -65,6 +65,11 @@ Implemented in the current migration checkpoint:
 The live media transport currently exposes ticketed HLS. WebRTC connection
 metadata remains a later media-gateway phase.
 
+The events endpoint currently returns normalized recording/system activity. Each
+recording segment is represented with its camera, timestamp, status message, and
+source. It is not a motion-detection feed until an authorized camera event
+source is integrated.
+
 ## Roles
 
 | Role | Scope |
