@@ -1,0 +1,304 @@
+openapi: 3.1.0
+info:
+  title: Camrelay API
+  version: 1.0.0
+  description: Versioned control-plane contract for the self-hosted camera relay.
+servers:
+  - url: http://localhost:8080
+security:
+  - sessionCookie: []
+  - bearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      security: []
+      summary: Liveness and storage health
+      responses:
+        '200':
+          description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/v1/system/readiness:
+    get:
+      security: []
+      summary: Deployment readiness
+      responses:
+        '200':
+          description: Ready
+        '503':
+          description: Not ready
+  /api/v1/auth/login:
+    post:
+      security: []
+      summary: Create a browser session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session created; an HttpOnly cookie is also set
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/refresh:
+    post:
+      summary: Rotate the current browser session
+      responses:
+        '200':
+          description: Rotated session
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the current browser session
+      responses:
+        '204':
+          description: Session revoked
+  /api/v1/me:
+    get:
+      summary: Current authenticated principal
+      responses:
+        '200':
+          description: Principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Principal'
+  /api/v1/cameras:
+    get:
+      summary: List secret-free cameras
+      responses:
+        '200':
+          description: Camera summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CameraSummary'
+    post:
+      summary: Add a camera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraInput'
+      responses:
+        '201':
+          description: Camera created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraSummary'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/cameras/{camera_id}:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      summary: Get a secret-free camera
+      responses:
+        '200':
+          description: Camera
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraSummary'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: Update a camera; omitted secrets are retained
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraPatch'
+      responses:
+        '200':
+          description: Updated camera
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraSummary'
+    delete:
+      summary: Stop and delete a camera
+      responses:
+        '204':
+          description: Camera deleted
+  /api/v1/cameras/{camera_id}/start:
+    post:
+      summary: Start a camera relay
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Start requested
+  /api/v1/cameras/{camera_id}/stop:
+    post:
+      summary: Stop a camera relay
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Stopped
+  /api/v1/providers:
+    get:
+      summary: List secret-free provider profiles
+      responses:
+        '200':
+          description: Provider summaries
+    post:
+      summary: Add a provider profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderInput'
+      responses:
+        '201':
+          description: Provider created
+  /api/v1/providers/{provider_id}:
+    parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get a secret-free provider profile
+      responses:
+        '200':
+          description: Provider summary
+    patch:
+      summary: Update provider credentials or signaling endpoint
+      description: Provider names are immutable because cameras reference them by name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderPatch'
+      responses:
+        '200':
+          description: Updated provider
+    delete:
+      summary: Delete an unused provider profile
+      responses:
+        '204':
+          description: Provider deleted
+        '409':
+          description: Provider is still in use
+  /api/v1/recordings:
+    get:
+      summary: List recording summaries
+      responses:
+        '200':
+          description: Recording summaries
+  /api/v1/tunnels:
+    get:
+      summary: List secret-free tunnel lifecycle status
+      responses:
+        '200':
+          description: Tunnel status
+  /api/v1/tokens:
+    get:
+      summary: List secret-free API token summaries
+      responses:
+        '200':
+          description: Token summaries
+    post:
+      summary: Create an API token
+      description: The raw token is returned only in this response and must be stored by the caller.
+      responses:
+        '201':
+          description: Token created
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: camrelay_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    CameraId:
+      name: camera_id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Authentication required
+    NotFound:
+      description: Resource not found
+    ValidationError:
+      description: Invalid input
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    Principal:
+      type: object
+      required: [username, role, auth_type]
+      properties:
+        username: { type: string }
+        role: { type: string, enum: [owner, admin, operator, viewer] }
+        auth_type: { type: string, enum: [session, token] }
+    Health:
+      type: object
+      required: [api_version, status, storage, camera_count]
+      properties:
+        api_version: { type: string }
+        status: { type: string, enum: [ok, degraded] }
+        storage: { type: string, enum: [sqlite, legacy_json] }
+        camera_count: { type: integer }
+    CameraSummary:
+      type: object
+      required: [id, name, brand, serial, local_port, auto_start]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        brand: { type: string }
+        serial: { type: string }
+        local_port: { type: integer, minimum: 1, maximum: 65535 }
+        auto_start: { type: boolean }
+    CameraInput:
+      allOf:
+        - $ref: '#/components/schemas/CameraPatch'
+        - type: object
+          required: [name, brand, serial, username, password, port, local_port]
+    CameraPatch:
+      type: object
+      properties:
+        name: { type: string }
+        brand: { type: string }
+        serial: { type: string }
+        username: { type: string }
+        password: { type: string, format: password }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        local_port: { type: integer, minimum: 1, maximum: 65535 }
+        auto_start: { type: boolean }
+    ProviderInput:
+      allOf:
+        - $ref: '#/components/schemas/ProviderPatch'
+        - type: object
+          required: [name, main_server, app_username, app_userkey]
+    ProviderPatch:
+      type: object
+      properties:
+        name: { type: string }
+        main_server: { type: string }
+        app_username: { type: string }
+        app_userkey: { type: string, format: password }

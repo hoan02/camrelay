@@ -1,5 +1,8 @@
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::config::{AppConfig, Brand, Camera};
 use crate::recordings::{archive_poll_interval, RecordingManager};
@@ -102,7 +105,7 @@ async fn main() {
 
     let state = AppState {
         config,
-        sessions: Arc::new(Mutex::new(Vec::new())),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
         tunnel_manager,
         recording_manager,
         playback_tickets: Arc::new(Mutex::new(std::collections::HashMap::new())),

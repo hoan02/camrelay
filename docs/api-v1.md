@@ -26,6 +26,7 @@
 Implemented in the current migration checkpoint:
 
     GET    /api/v1/health                 public migration health
+    GET    /api/v1/system/readiness       public deployment readiness
     GET    /api/v1/cameras                authenticated, secret-free summaries
     POST   /api/v1/cameras                authenticated camera onboarding
     GET    /api/v1/providers               authenticated, secret-free summaries
@@ -58,7 +59,6 @@ storage and authorization behavior is migrated from the legacy handlers:
 
     GET    /api/v1/events
     GET    /api/v1/system/health
-    GET    /api/v1/system/readiness
     GET    /api/v1/system/stream
 
 ## Roles

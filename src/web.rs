@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     path::Path as FsPath,
     process::Stdio,
     sync::{Arc, Mutex},
@@ -39,11 +40,18 @@ use crate::tunnel::{TunnelManager, TunnelStatus};
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
-    pub sessions: Arc<Mutex<Vec<String>>>,
+    pub sessions: Arc<Mutex<HashMap<String, AuthPrincipal>>>,
     pub tunnel_manager: Arc<TunnelManager>,
     pub recording_manager: RecordingManager,
     pub playback_tickets: Arc<Mutex<std::collections::HashMap<String, PlaybackGrant>>>,
     pub storage: Option<Storage>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AuthPrincipal {
+    pub username: String,
+    pub role: String,
+    pub auth_type: String,
 }
 
 #[derive(Clone)]
@@ -52,45 +60,78 @@ pub struct PlaybackGrant {
     pub expires_at: Instant,
 }
 
-async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let token = session_token(req.headers());
+async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let Some(token) = session_token(req.headers()) else {
+        return unauthorized_response();
+    };
+    let Some(principal) = authenticate_token(&state, &token).await else {
+        return unauthorized_response();
+    };
 
-    if let Some(t) = token {
-        if state.sessions.lock().unwrap().contains(&t) {
-            return next.run(req).await;
-        }
-
-        let valid = match &state.storage {
-            Some(storage) => storage
-                .list_api_tokens()
-                .await
-                .map(|tokens| {
-                    token_is_valid(
-                        &t,
-                        tokens
-                            .into_iter()
-                            .map(|token| (token.token, token.enabled, token.expires_at)),
-                    )
-                })
-                .unwrap_or(false),
-            None => token_is_valid(
-                &t,
-                load_tokens()
-                    .into_iter()
-                    .map(|token| (token.token, token.enabled, token.expires_at)),
-            ),
-        };
-
-        if valid {
-            return next.run(req).await;
-        }
+    if !matches!(
+        req.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) && !is_admin_role(&principal.role)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "auth.forbidden",
+                "message": "This operation requires an owner or admin role."
+            })),
+        )
+            .into_response();
     }
 
+    req.extensions_mut().insert(principal);
+    next.run(req).await
+}
+
+fn unauthorized_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({"error": "Unauthorized"})),
+        Json(serde_json::json!({
+            "code": "auth.unauthorized",
+            "message": "Authentication is required."
+        })),
     )
         .into_response()
+}
+
+fn is_admin_role(role: &str) -> bool {
+    matches!(role, "owner" | "admin")
+}
+
+async fn authenticate_token(state: &AppState, token: &str) -> Option<AuthPrincipal> {
+    if let Some(principal) = state.sessions.lock().unwrap().get(token).cloned() {
+        return Some(principal);
+    }
+
+    let valid = match &state.storage {
+        Some(storage) => storage
+            .list_api_tokens()
+            .await
+            .map(|tokens| {
+                token_is_valid(
+                    token,
+                    tokens
+                        .into_iter()
+                        .map(|token| (token.token, token.enabled, token.expires_at)),
+                )
+            })
+            .unwrap_or(false),
+        None => token_is_valid(
+            token,
+            load_tokens()
+                .into_iter()
+                .map(|token| (token.token, token.enabled, token.expires_at)),
+        ),
+    };
+    valid.then(|| AuthPrincipal {
+        username: "service-token".to_string(),
+        role: "admin".to_string(),
+        auth_type: "token".to_string(),
+    })
 }
 
 fn token_is_valid<I>(token: &str, tokens: I) -> bool
@@ -124,18 +165,39 @@ struct LoginResponse {
 }
 
 async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) -> impl IntoResponse {
-    let database_authenticated = match &state.storage {
-        Some(storage) => storage
-            .verify_user(&body.username, &body.password)
-            .await
-            .unwrap_or(false),
-        None => false,
+    let (authenticated, role) = match &state.storage {
+        Some(storage) => {
+            let authenticated = storage
+                .verify_user(&body.username, &body.password)
+                .await
+                .unwrap_or(false);
+            let role = if authenticated {
+                storage
+                    .user_role(&body.username)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "owner".to_string())
+            } else {
+                "owner".to_string()
+            };
+            (authenticated, role)
+        }
+        None => (
+            body.username == state.config.username && body.password == state.config.password,
+            "owner".to_string(),
+        ),
     };
-    if database_authenticated
-        || (body.username == state.config.username && body.password == state.config.password)
-    {
+    if authenticated {
         let token = Uuid::new_v4().to_string();
-        state.sessions.lock().unwrap().push(token.clone());
+        state.sessions.lock().unwrap().insert(
+            token.clone(),
+            AuthPrincipal {
+                username: body.username,
+                role,
+                auth_type: "session".to_string(),
+            },
+        );
         let cookie = format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/");
         (
             StatusCode::OK,
@@ -154,11 +216,7 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(token) = session_token(&headers) {
-        state
-            .sessions
-            .lock()
-            .unwrap()
-            .retain(|active| active != &token);
+        state.sessions.lock().unwrap().remove(&token);
     }
     (
         StatusCode::NO_CONTENT,
@@ -175,12 +233,11 @@ async fn refresh_session(State(state): State<AppState>, headers: HeaderMap) -> i
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let mut sessions = state.sessions.lock().unwrap();
-    if !sessions.iter().any(|token| token == &old_token) {
+    let Some(principal) = sessions.remove(&old_token) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
-    sessions.retain(|token| token != &old_token);
+    };
     let token = Uuid::new_v4().to_string();
-    sessions.push(token.clone());
+    sessions.insert(token.clone(), principal);
     let cookie = format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400");
     (
         StatusCode::OK,
@@ -194,42 +251,10 @@ async fn current_user(State(state): State<AppState>, headers: HeaderMap) -> impl
     let Some(token) = session_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    if state.sessions.lock().unwrap().contains(&token) {
-        return Json(serde_json::json!({
-            "username": state.config.username,
-            "role": "owner",
-            "auth_type": "session"
-        }))
-        .into_response();
-    }
-    let valid = match &state.storage {
-        Some(storage) => storage
-            .list_api_tokens()
-            .await
-            .map(|tokens| {
-                token_is_valid(
-                    &token,
-                    tokens
-                        .into_iter()
-                        .map(|token| (token.token, token.enabled, token.expires_at)),
-                )
-            })
-            .unwrap_or(false),
-        None => token_is_valid(
-            &token,
-            load_tokens()
-                .into_iter()
-                .map(|token| (token.token, token.enabled, token.expires_at)),
-        ),
-    };
-    if valid {
-        Json(
-            serde_json::json!({"username": "service-token", "role": "admin", "auth_type": "token"}),
-        )
-        .into_response()
-    } else {
-        StatusCode::UNAUTHORIZED.into_response()
-    }
+    authenticate_token(&state, &token)
+        .await
+        .map(|principal| Json(principal).into_response())
+        .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response())
 }
 
 fn session_token(headers: &HeaderMap) -> Option<String> {
@@ -271,6 +296,37 @@ async fn v1_health(State(state): State<AppState>) -> impl IntoResponse {
         "storage": storage,
         "camera_count": camera_count,
     }))
+}
+
+async fn v1_readiness(State(state): State<AppState>) -> impl IntoResponse {
+    let checks = if let Some(storage) = &state.storage {
+        serde_json::json!({
+            "storage": storage.health_check().await.is_ok(),
+            "mode": "sqlite"
+        })
+    } else {
+        serde_json::json!({
+            "storage": true,
+            "mode": "legacy_json"
+        })
+    };
+    let ready = checks
+        .get("storage")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "api_version": API_VERSION,
+            "status": if ready { "ready" } else { "not_ready" },
+            "checks": checks
+        })),
+    )
 }
 
 async fn get_v1_cameras(State(state): State<AppState>) -> impl IntoResponse {
@@ -1683,7 +1739,9 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             playback_auth_middleware,
         ));
-    let v1_public = Router::new().route("/health", get(v1_health));
+    let v1_public = Router::new()
+        .route("/health", get(v1_health))
+        .route("/system/readiness", get(v1_readiness));
     let v1_auth = Router::new()
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh_session))
