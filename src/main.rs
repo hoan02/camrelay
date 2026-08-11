@@ -6,15 +6,18 @@ use std::{
 
 use crate::config::{AppConfig, Brand, Camera};
 use crate::recordings::{archive_poll_interval, RecordingManager};
+use crate::rtsp_proxy::RtspProxyManager;
 use crate::tunnel::TunnelManager;
 use crate::web::{create_router, AppState};
 use camrelay_storage::{Storage, StoredCameraConfig, StoredProviderConfig};
 
 mod config;
 mod dh;
+mod live;
 mod process;
 mod ptcp;
 mod recordings;
+mod rtsp_proxy;
 mod tunnel;
 mod web;
 
@@ -24,7 +27,9 @@ async fn main() {
     let web_port = config.web_port;
 
     let tunnel_manager = Arc::new(TunnelManager::new());
-    let recording_manager = RecordingManager::new(config.clone());
+    let rtsp_proxy = RtspProxyManager::new();
+    let recording_manager = RecordingManager::new(config.clone(), rtsp_proxy.clone());
+    let live_manager = live::LiveManager::new(config.clone(), rtsp_proxy);
 
     let storage = if config.database_enabled {
         match Storage::open(&config.database_path).await {
@@ -107,6 +112,8 @@ async fn main() {
         config,
         sessions: Arc::new(Mutex::new(HashMap::new())),
         tunnel_manager,
+        live_manager,
+        live_tickets: Arc::new(Mutex::new(HashMap::new())),
         recording_manager,
         playback_tickets: Arc::new(Mutex::new(std::collections::HashMap::new())),
         storage,

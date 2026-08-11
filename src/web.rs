@@ -34,6 +34,7 @@ use crate::config::{
     AppConfig, Brand, Camera,
 };
 use crate::dh::probe_provider;
+use crate::live::LiveManager;
 use crate::recordings::{Recording, RecordingManager};
 use crate::tunnel::{TunnelManager, TunnelStatus};
 
@@ -42,6 +43,8 @@ pub struct AppState {
     pub config: AppConfig,
     pub sessions: Arc<Mutex<HashMap<String, AuthPrincipal>>>,
     pub tunnel_manager: Arc<TunnelManager>,
+    pub live_manager: LiveManager,
+    pub live_tickets: Arc<Mutex<HashMap<String, LiveGrant>>>,
     pub recording_manager: RecordingManager,
     pub playback_tickets: Arc<Mutex<std::collections::HashMap<String, PlaybackGrant>>>,
     pub storage: Option<Storage>,
@@ -60,6 +63,12 @@ pub struct PlaybackGrant {
     pub expires_at: Instant,
 }
 
+#[derive(Clone)]
+pub struct LiveGrant {
+    pub camera_id: String,
+    pub expires_at: Instant,
+}
+
 async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let Some(token) = session_token(req.headers()) else {
         return unauthorized_response();
@@ -68,13 +77,14 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
         return unauthorized_response();
     };
 
-    let playback_ticket_request =
-        req.method() == Method::POST && req.uri().path().ends_with("/playback-ticket");
+    let scoped_ticket_request = req.method() == Method::POST
+        && (req.uri().path().ends_with("/playback-ticket")
+            || req.uri().path().ends_with("/live-ticket"));
     if !matches!(
         req.method(),
         &Method::GET | &Method::HEAD | &Method::OPTIONS
     ) && !is_admin_role(&principal.role)
-        && !playback_ticket_request
+        && !scoped_ticket_request
     {
         return (
             StatusCode::FORBIDDEN,
@@ -496,6 +506,17 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
         })
 }
 
+async fn find_camera_config(state: &AppState, id: &str) -> Result<Option<Camera>, String> {
+    match &state.storage {
+        Some(storage) => storage
+            .find_camera_config(id)
+            .await
+            .map(|camera| camera.map(camera_from_storage))
+            .map_err(|error| error.to_string()),
+        None => Ok(load_cameras().into_iter().find(|camera| camera.id == id)),
+    }
+}
+
 async fn v1_health(State(state): State<AppState>) -> impl IntoResponse {
     let (storage, storage_ok, camera_count) = match &state.storage {
         Some(storage) => match storage.health_check().await {
@@ -850,6 +871,7 @@ async fn delete_v1_camera(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     state.tunnel_manager.stop(&id);
+    state.live_manager.stop(&id);
     let result = if let Some(storage) = &state.storage {
         storage.delete_camera(&id).await
     } else {
@@ -1816,6 +1838,7 @@ async fn start_tunnel(State(state): State<AppState>, Path(id): Path<String>) -> 
 
 async fn stop_tunnel(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     state.tunnel_manager.stop(&id);
+    state.live_manager.stop(&id);
     StatusCode::OK
 }
 
@@ -2050,6 +2073,148 @@ async fn issue_playback_ticket(
         .into_response()
 }
 
+#[derive(Serialize)]
+struct LiveTicketResponse {
+    protocol: &'static str,
+    url: String,
+    expires_in_seconds: u64,
+}
+
+async fn issue_live_ticket(
+    State(state): State<AppState>,
+    principal: Option<Extension<AuthPrincipal>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if principal.is_none() {
+        return unauthorized_response();
+    }
+    if !state.live_manager.config().live_enabled {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "live.disabled",
+                "message": "Live HLS is disabled in config.json."
+            })),
+        )
+            .into_response();
+    }
+    let camera = match find_camera_config(&state, &id).await {
+        Ok(Some(camera)) => camera,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "live.camera_load_failed",
+                    "message": error
+                })),
+            )
+                .into_response()
+        }
+    };
+    if !matches!(
+        state.tunnel_manager.status(&camera.id),
+        TunnelStatus::Running
+    ) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "live.tunnel_required",
+                "message": "Start the camera relay before requesting live playback."
+            })),
+        )
+            .into_response();
+    }
+    if let Err(error) = state.live_manager.start(camera).await {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "code": "live.gateway_start_failed",
+                "message": error
+            })),
+        )
+            .into_response();
+    }
+
+    let ticket = Uuid::new_v4().to_string();
+    let expires_in_seconds = 900;
+    let mut tickets = state.live_tickets.lock().unwrap();
+    let now = Instant::now();
+    tickets.retain(|_, grant| grant.expires_at > now);
+    tickets.insert(
+        ticket.clone(),
+        LiveGrant {
+            camera_id: id,
+            expires_at: now + Duration::from_secs(expires_in_seconds),
+        },
+    );
+    (
+        StatusCode::OK,
+        Json(LiveTicketResponse {
+            protocol: "hls",
+            url: format!("/api/v1/live/{ticket}/index.m3u8"),
+            expires_in_seconds,
+        }),
+    )
+        .into_response()
+}
+
+async fn stream_live_handler(
+    State(state): State<AppState>,
+    Path((ticket, file)): Path<(String, String)>,
+) -> Response {
+    let grant = {
+        let tickets = state.live_tickets.lock().unwrap();
+        tickets
+            .get(&ticket)
+            .filter(|grant| grant.expires_at > Instant::now())
+            .cloned()
+    };
+    let Some(grant) = grant else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "code": "live.ticket_invalid",
+                "message": "Live ticket expired or invalid."
+            })),
+        )
+            .into_response();
+    };
+    if !safe_live_component(&grant.camera_id) || !safe_live_file(&file) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let path = FsPath::new(&state.live_manager.config().live_dir)
+        .join(grant.camera_id)
+        .join(&file);
+    let content = match tokio::fs::read(path).await {
+        Ok(content) => content,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let content_type = if file.ends_with(".m3u8") {
+        "application/vnd.apple.mpegurl"
+    } else {
+        "video/mp2t"
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(content))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn safe_live_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains('/')
+        && !value.contains('\\')
+        && value != "."
+        && value != ".."
+}
+
+fn safe_live_file(value: &str) -> bool {
+    safe_live_component(value) && (value.ends_with(".m3u8") || value.ends_with(".ts"))
+}
+
 async fn playback_auth_middleware(
     State(state): State<AppState>,
     req: Request,
@@ -2265,7 +2430,8 @@ pub fn create_router(state: AppState) -> Router {
     let v1_public = Router::new()
         .route("/health", get(v1_health))
         .route("/system/health", get(v1_health))
-        .route("/system/readiness", get(v1_readiness));
+        .route("/system/readiness", get(v1_readiness))
+        .route("/live/:ticket/*file", get(stream_live_handler));
     let v1_auth = Router::new()
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh_session))
@@ -2281,6 +2447,7 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(delete_v1_camera),
         )
         .route("/cameras/:id/diagnostics", get(get_v1_camera_diagnostics))
+        .route("/cameras/:id/live-ticket", post(issue_live_ticket))
         .route("/providers", get(get_v1_providers).post(create_v1_provider))
         .route(
             "/providers/:id",

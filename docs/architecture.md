@@ -8,7 +8,7 @@ Camrelay is a self-hosted camera gateway and private NVR. The backend owns camer
 
     Remote camera
       -> camrelay-core (P2P/PTCP and local RTSP)
-      -> media gateway (MediaMTX or go2rtc)
+      -> local RTSP credential proxy -> FFmpeg HLS (optional)
       -> camrelay-api (identity, policy, API, realtime events)
       -> camrelay-media (recording, archive, retention)
       -> web console / mobile app
@@ -36,9 +36,9 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 | Component | Owns | Must not own |
 | --- | --- | --- |
 | camrelay-core | P2P protocol, tunnel lifecycle, local RTSP endpoints | HTTP, database schema, UI concerns |
-| camrelay-api | identity, RBAC, API, live/playback ticket issuing | direct video transcoding |
-| camrelay-media | recording jobs, archive queue, retention policy | user authorization decisions |
-| media gateway | RTSP ingest, WebRTC/HLS output | vendor P2P credentials |
+| camrelay-api | identity, RBAC, API, live/playback ticket issuing | vendor credential exposure |
+| camrelay-media | recording jobs, archive queue, local HLS worker | user authorization decisions |
+| RTSP credential proxy | loopback Basic/Digest auth boundary for local consumers | remote P2P signaling |
 | web/mobile | user interaction and media playback | device secrets or direct RTSP access |
 
 ## Security and persistence
@@ -61,4 +61,4 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 
 ## Current migration checkpoint
 
-The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and legacy JSON handlers, while SQLite mode owns the v1 camera/provider snapshots, auth sessions, onboarding, CRUD, tunnel startup, recording reconciliation, API tokens, RBAC, and readiness contract. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. The React console now has v1 parity for the current management surface; making it the default production console, adding a real live-media gateway, and creating the Flutter client remain later gates.
+The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and legacy JSON handlers, while SQLite mode owns the v1 camera/provider snapshots, auth sessions, onboarding, CRUD, tunnel startup, recording reconciliation, local HLS, API tokens, RBAC, and readiness contract. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. The React console now has v1 parity for the current management surface; WebRTC, durable motion events, and Flutter SDK verification remain later gates.

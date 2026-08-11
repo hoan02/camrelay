@@ -57,6 +57,7 @@ flowchart LR
 - Auto-start for cameras with `auto_start: true`.
 - Brand-specific P2P server and app credentials.
 - SQLite v1 persistence with encrypted provider/camera secrets, Argon2id user passwords, refresh sessions, RBAC, and idempotent import from legacy JSON files.
+- Optional local HLS live preview through FFmpeg and a loopback-only RTSP credential proxy; camera secrets do not enter the FFmpeg command line or a sidecar service.
 - Direct and relay handshake paths in the Rust implementation, subject to device/cloud support.
 
 ### Not yet promised
@@ -242,6 +243,8 @@ Enable recording in config.json:
 
     {
       "recordings_enabled": true,
+      "live_enabled": true,
+      "live_dir": "live",
       "recordings_dir": "recordings",
       "recordings_index": "recordings.json",
       "segment_seconds": 300,
@@ -266,6 +269,8 @@ For Google Drive, configure an rclone remote locally:
 Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically.
 
 The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
+
+To enable browser live preview, set `live_enabled` to `true`, install FFmpeg, start the camera relay, and press Live on the camera card. Camrelay creates short-lived HLS segments under `live_dir`, serves them through a camera-scoped ticket, and uses an in-process RTSP auth proxy so the camera username/password stays inside camrelay. HLS playback support depends on the browser; WebRTC remains a later gateway phase.
 
 The SQLite v1 foundation is opt-in for now. Set `database_enabled` to `true` to create the configured database, apply SQLx migrations, and import any legacy JSON files idempotently. Before enabling it when providers or cameras exist, set `CAMRELAY_SECRET_KEY` to a base64-encoded 32-byte key (see `.env.example`). User passwords are Argon2id hashes; provider and camera secrets are encrypted with ChaCha20-Poly1305 and the master key must be backed up separately. In SQLite mode, v1 camera/provider reads, camera onboarding, tunnel startup, auto-start, recording reconciliation, auth, and token management use SQLite. Legacy JSON handlers remain available only as a rollback path; the database file is ignored by Git.
 

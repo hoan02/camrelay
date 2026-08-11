@@ -106,3 +106,5 @@ a { color: inherit; text-decoration: none; }
   .diagnostic-grid { grid-template-columns: 1fr; }
   .diagnostic-wide { grid-column: auto; }
 }
+
+.camera-live-player { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }

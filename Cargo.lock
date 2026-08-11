@@ -217,6 +217,7 @@ dependencies = [
  "camrelay-contract",
  "camrelay-storage",
  "chrono",
+ "md-5",
  "rand",
  "serde",
  "serde_json",

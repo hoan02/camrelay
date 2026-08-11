@@ -178,6 +178,39 @@ paths:
                 $ref: '#/components/schemas/CameraDiagnostics'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/cameras/{camera_id}/live-ticket:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    post:
+      summary: Issue a scoped HLS live ticket
+      description: Starts the local HLS worker when enabled and returns a camera-scoped URL.
+      responses:
+        '200':
+          description: Live ticket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveTicket'
+        '409':
+          description: Live is disabled or the camera relay is not running
+  /api/v1/live/{ticket}/{file}:
+    parameters:
+      - name: ticket
+        in: path
+        required: true
+        schema: { type: string }
+      - name: file
+        in: path
+        required: true
+        schema: { type: string, pattern: '^(index\.m3u8|segment-[0-9]+\.ts)$' }
+    get:
+      security: []
+      summary: Read a scoped HLS playlist or segment
+      responses:
+        '200':
+          description: HLS media file
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/cameras/{camera_id}/start:
     post:
       summary: Start a camera relay
@@ -426,6 +459,13 @@ components:
         local_port: { type: integer, minimum: 1, maximum: 65535 }
         rtsp_path: { type: string }
         next_action: { type: string }
+    LiveTicket:
+      type: object
+      required: [protocol, url, expires_in_seconds]
+      properties:
+        protocol: { type: string, enum: [hls] }
+        url: { type: string }
+        expires_in_seconds: { type: integer, minimum: 1 }
     ProviderInput:
       allOf:
         - $ref: '#/components/schemas/ProviderPatch'

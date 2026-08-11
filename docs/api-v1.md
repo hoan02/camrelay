@@ -46,6 +46,8 @@ Implemented in the current migration checkpoint:
     PATCH  /api/v1/cameras/{camera_id}
     DELETE /api/v1/cameras/{camera_id}
     GET    /api/v1/cameras/{camera_id}/diagnostics
+    POST   /api/v1/cameras/{camera_id}/live-ticket
+    GET    /api/v1/live/{ticket}/{file}     scoped HLS playlist/segment delivery
     GET    /api/v1/providers/{provider_id}
     PATCH  /api/v1/providers/{provider_id}
     DELETE /api/v1/providers/{provider_id}
@@ -58,10 +60,9 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/users                 owner-only, secret-free user summaries
     POST   /api/v1/users                 owner-only user creation
 
-The endpoints below remain pending until their media/event transport is
-implemented and tested end to end:
+The following transport remains pending until it is implemented and tested
+end to end:
 
-    POST   /api/v1/cameras/{camera_id}/live-ticket
     GET    /api/v1/system/stream
 
 ## Roles
@@ -76,7 +77,12 @@ Provider and camera secrets are never returned by GET endpoints. An update paylo
 
 Browser sessions use an HttpOnly `camrelay_session` cookie. API clients may send
 the bearer token returned by login or token creation. The refresh endpoint rotates
-session tokens; logout revokes the in-memory session and clears the cookie.
+server-side session tokens; logout revokes the SQLite session and clears the cookie.
+
+When `live_enabled` is true and a camera relay is running, the live-ticket
+endpoint starts a local FFmpeg HLS process and returns a 15-minute URL scoped to
+one camera. FFmpeg reads a loopback RTSP credential proxy; camera credentials do
+not appear in the FFmpeg command line or leave camrelay for a sidecar service.
 
 Provider names are immutable after creation because camera records reference the
 provider by name. A provider in use by a camera cannot be deleted.

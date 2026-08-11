@@ -25,6 +25,9 @@ fn default_database_path() -> String {
 fn default_web_root() -> String {
     "static".to_string()
 }
+fn default_live_dir() -> String {
+    "live".to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
@@ -35,6 +38,10 @@ pub struct AppConfig {
     pub web_root: String,
     #[serde(default)]
     pub recordings_enabled: bool,
+    #[serde(default)]
+    pub live_enabled: bool,
+    #[serde(default = "default_live_dir")]
+    pub live_dir: String,
     #[serde(default = "default_recordings_dir")]
     pub recordings_dir: String,
     #[serde(default = "default_recordings_index")]
@@ -67,6 +74,8 @@ impl Default for AppConfig {
             web_port: 8080,
             web_root: default_web_root(),
             recordings_enabled: false,
+            live_enabled: false,
+            live_dir: default_live_dir(),
             recordings_dir: default_recordings_dir(),
             recordings_index: default_recordings_index(),
             segment_seconds: default_segment_seconds(),

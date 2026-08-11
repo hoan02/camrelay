@@ -38,6 +38,7 @@ export type Recording = {
 };
 
 export type PlaybackTicket = { url: string; expires_in_seconds: number };
+export type LiveTicket = { protocol: "hls"; url: string; expires_in_seconds: number };
 
 export type Provider = {
   id: string;
@@ -137,6 +138,7 @@ export const api = {
   deleteProvider: (id: string) => request<void>(`/api/v1/providers/${id}`, { method: "DELETE" }),
   tunnels: () => request<Tunnel[]>("/api/v1/tunnels"),
   cameraDiagnostics: (id: string) => request<CameraDiagnostics>(`/api/v1/cameras/${id}/diagnostics`),
+  liveTicket: (id: string) => request<LiveTicket>(`/api/v1/cameras/${id}/live-ticket`, { method: "POST" }),
   events: () => request<EventSummary[]>("/api/v1/events"),
   startCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/start`, { method: "POST" }),
   stopCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/stop`, { method: "POST" }),

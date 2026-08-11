@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     config::{AppConfig, Camera},
+    rtsp_proxy::RtspProxyManager,
     tunnel::{TunnelManager, TunnelStatus},
 };
 
@@ -38,18 +39,20 @@ pub struct Recording {
 #[derive(Clone)]
 pub struct RecordingManager {
     config: AppConfig,
+    proxy: RtspProxyManager,
     records: Arc<Mutex<Vec<Recording>>>,
     processes: Arc<Mutex<HashMap<String, Child>>>,
 }
 
 impl RecordingManager {
-    pub fn new(config: AppConfig) -> Self {
+    pub fn new(config: AppConfig, proxy: RtspProxyManager) -> Self {
         let records = fs::read_to_string(&config.recordings_index)
             .ok()
             .and_then(|content| serde_json::from_str::<Vec<Recording>>(&content).ok())
             .unwrap_or_default();
         Self {
             config,
+            proxy,
             records: Arc::new(Mutex::new(records)),
             processes: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -106,7 +109,7 @@ impl RecordingManager {
                 .iter()
                 .filter(|camera| matches!(tunnels.status(&camera.id), TunnelStatus::Running))
             {
-                self.start_recorder(camera);
+                self.start_recorder(camera).await;
             }
         }
 
@@ -186,24 +189,34 @@ impl RecordingManager {
             if let Some(mut child) = processes.remove(&id) {
                 let _ = child.start_kill();
             }
+            self.proxy.stop(&id);
         }
     }
 
-    fn start_recorder(&self, camera: &Camera) {
-        let mut processes = self.processes.lock().unwrap();
-        if processes.contains_key(&camera.id) {
+    async fn start_recorder(&self, camera: &Camera) {
+        if self.processes.lock().unwrap().contains_key(&camera.id) {
             return;
         }
 
+        let proxy_port = match self.proxy.ensure(camera.clone()).await {
+            Ok(port) => port,
+            Err(error) => {
+                println!(
+                    "[{}] Could not start RTSP credential proxy: {}",
+                    camera.name, error
+                );
+                return;
+            }
+        };
+        let mut processes = self.processes.lock().unwrap();
+
         let camera_dir = Path::new(&self.config.recordings_dir).join(&camera.id);
         if fs::create_dir_all(&camera_dir).is_err() {
+            self.proxy.stop(&camera.id);
             return;
         }
         let output = camera_dir.join("%Y-%m-%dT%H-%M-%S.mp4");
-        let url = format!(
-            "rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-            camera.username, camera.password, camera.local_port
-        );
+        let url = format!("rtsp://127.0.0.1:{proxy_port}/cam/realmonitor?channel=1&subtype=0");
         let segment_seconds = self.config.segment_seconds.max(30).to_string();
         let output = output.to_string_lossy().to_string();
         let result = Command::new(&self.config.ffmpeg_path)
@@ -242,6 +255,9 @@ impl RecordingManager {
                 "[{}] Could not start ffmpeg recorder: {}",
                 camera.name, error
             ),
+        }
+        if !processes.contains_key(&camera.id) {
+            self.proxy.stop(&camera.id);
         }
     }
 
