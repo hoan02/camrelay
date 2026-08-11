@@ -10,6 +10,7 @@ The `v1-foundation` branch is an incremental migration from the known `prototype
 
 - Rust is now a Cargo workspace with a transport-independent `camrelay-contract` crate.
 - `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, persistent English/Vietnamese settings, and an API client.
+- `apps/mobile` contains the Flutter companion scaffold using the same versioned API and platform secure storage for bearer tokens; Flutter build verification is pending until the SDK is installed.
 - `packages/design-tokens` is the first shared visual language seam for the future web and mobile clients.
 - `apps/web` is the feature-parity v1 console for development and can be served by the Rust binary by setting `web_root` to `apps/web/dist`; the legacy console remains available as a rollback path.
 
@@ -120,15 +121,23 @@ npm run web:dev
 
 Open `http://127.0.0.1:5173/login`. Vite proxies `/api` to the Rust service on port `8080`. The console covers the v1 dashboard, camera/provider CRUD, lifecycle controls, recording playback/archive actions, API tokens, settings, and technical notes.
 
-To serve the built console from the Rust binary after feature parity checks:
+To serve the built console from the Rust binary locally:
 
 ```bash
 npm run web:build
-# set web_root in config.json to "apps/web/dist"
+# set web_root in config.json to "apps/web/dist", or export
+# CAMRELAY_WEB_ROOT=apps/web/dist
 cargo run --release
 ```
 
 Leave `web_root` as `static` to roll back to the legacy console.
+
+### Flutter companion (foundation)
+
+The mobile client lives in `apps/mobile` and targets the same `/api/v1`
+contract. Install Flutter, then run `flutter pub get`, `flutter analyze`, and
+`flutter test` from that directory. The app stores its bearer token in platform
+secure storage and never receives provider or camera credentials.
 
 The service reads JSON files from its current working directory. Missing `config.json` falls back to the built-in admin/port defaults; brands, cameras, and tokens fall back to empty lists.
 

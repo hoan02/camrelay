@@ -45,22 +45,21 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/cameras/{camera_id}
     PATCH  /api/v1/cameras/{camera_id}
     DELETE /api/v1/cameras/{camera_id}
+    GET    /api/v1/cameras/{camera_id}/diagnostics
     GET    /api/v1/providers/{provider_id}
     PATCH  /api/v1/providers/{provider_id}
     DELETE /api/v1/providers/{provider_id}
+    GET    /api/v1/events
+    GET    /api/v1/system/health
     POST   /api/v1/auth/login
     POST   /api/v1/auth/refresh
     POST   /api/v1/auth/logout
     GET    /api/v1/me
 
-The endpoints below are the target contract and remain pending until their
-storage and authorization behavior is migrated from the legacy handlers:
-
-    GET    /api/v1/cameras/{camera_id}/diagnostics
+The endpoints below remain pending until their media/event transport is
+implemented and tested end to end:
 
     POST   /api/v1/cameras/{camera_id}/live-ticket
-    GET    /api/v1/events
-    GET    /api/v1/system/health
     GET    /api/v1/system/stream
 
 ## Roles
@@ -82,6 +81,6 @@ provider by name. A provider in use by a camera cannot be deleted.
 
 The current camera POST writes SQLite when database mode is enabled and writes
 legacy JSON otherwise. It returns only a secret-free summary. Camera startup,
-provider lookup, auto-start, and recording reconciliation use the same SQLite
-source when that mode is enabled; legacy `/api` handlers remain for rollback
-until their CRUD parity is complete.
+provider lookup, auto-start, recording reconciliation, token management, and
+the v1 management surface use the same SQLite source when that mode is enabled;
+legacy `/api` handlers remain only for rollback.

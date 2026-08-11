@@ -410,6 +410,103 @@ async fn get_v1_camera(State(state): State<AppState>, Path(id): Path<String>) ->
     }
 }
 
+#[derive(Serialize)]
+struct CameraDiagnosticsResponse {
+    camera_id: String,
+    provider: String,
+    provider_configured: bool,
+    tunnel_status: String,
+    tunnel_error: Option<String>,
+    local_port: u16,
+    rtsp_path: &'static str,
+    next_action: String,
+}
+
+async fn get_v1_camera_diagnostics(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let camera = match &state.storage {
+        Some(storage) => match storage.list_cameras().await {
+            Ok(cameras) => cameras
+                .into_iter()
+                .find(|camera| camera.id == id)
+                .map(|camera| CameraSummary {
+                    id: camera.id,
+                    name: camera.name,
+                    brand: camera.brand,
+                    serial: camera.serial,
+                    local_port: camera.local_port,
+                    auto_start: camera.auto_start,
+                }),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "code": "camera.diagnostics_unavailable",
+                        "message": error.to_string()
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => load_cameras()
+            .into_iter()
+            .find(|camera| camera.id == id)
+            .map(|camera| CameraSummary {
+                id: camera.id,
+                name: camera.name,
+                brand: camera.brand,
+                serial: camera.serial,
+                local_port: camera.local_port,
+                auto_start: camera.auto_start,
+            }),
+    };
+    let Some(camera) = camera else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let provider_configured = match &state.storage {
+        Some(storage) => storage
+            .list_providers()
+            .await
+            .map(|providers| {
+                providers
+                    .iter()
+                    .any(|provider| provider.name == camera.brand)
+            })
+            .unwrap_or(false),
+        None => load_brands()
+            .iter()
+            .any(|provider| provider.name == camera.brand),
+    };
+    let (tunnel_status, tunnel_error) = match state.tunnel_manager.status(&id) {
+        TunnelStatus::Running => ("running".to_string(), None),
+        TunnelStatus::Starting => ("starting".to_string(), None),
+        TunnelStatus::Stopped => ("stopped".to_string(), None),
+        TunnelStatus::Error(error) => ("error".to_string(), Some(error)),
+    };
+    let next_action = if !provider_configured {
+        "Configure the provider profile before starting the relay.".to_string()
+    } else if tunnel_status == "running" {
+        "The local RTSP endpoint is ready for FFmpeg, Frigate, or a media gateway.".to_string()
+    } else {
+        "Start the relay, then verify the local RTSP endpoint with ffplay.".to_string()
+    };
+
+    Json(CameraDiagnosticsResponse {
+        camera_id: camera.id,
+        provider: camera.brand,
+        provider_configured,
+        tunnel_status,
+        tunnel_error,
+        local_port: camera.local_port,
+        rtsp_path: "/cam/realmonitor?channel=1&subtype=0",
+        next_action,
+    })
+    .into_response()
+}
+
 #[derive(Deserialize, Default)]
 struct CameraUpdatePayload {
     name: Option<String>,
@@ -676,6 +773,53 @@ async fn get_v1_recordings(
             })
             .collect::<Vec<_>>(),
     )
+}
+
+#[derive(Serialize)]
+struct EventSummary {
+    id: String,
+    kind: String,
+    camera_id: String,
+    camera_name: String,
+    occurred_at: String,
+    severity: String,
+    message: String,
+    source: String,
+}
+
+async fn get_v1_events(
+    State(state): State<AppState>,
+    Query(query): Query<RecordingsQuery>,
+) -> impl IntoResponse {
+    // Until a durable event table exists, closed recording segments are the
+    // only event source with a stable persisted timestamp. The `source` field
+    // keeps this boundary honest for clients that will later consume motion
+    // and system events as well.
+    let events = state
+        .recording_manager
+        .list_filtered(
+            query.camera_id.as_deref(),
+            query.status.as_deref(),
+            query.limit.unwrap_or(100),
+        )
+        .into_iter()
+        .map(|recording| EventSummary {
+            id: format!("recording:{}", recording.id),
+            kind: "recording.segment".to_string(),
+            camera_id: recording.camera_id,
+            camera_name: recording.camera_name,
+            occurred_at: recording
+                .ended_at
+                .unwrap_or_else(|| recording.started_at.clone()),
+            severity: "info".to_string(),
+            message: format!(
+                "{} recording segment is {}",
+                recording.kind, recording.status
+            ),
+            source: "recording_index".to_string(),
+        })
+        .collect::<Vec<_>>();
+    Json(events).into_response()
 }
 
 fn recording_summary(recording: Recording) -> RecordingSummary {
@@ -1904,6 +2048,7 @@ pub fn create_router(state: AppState) -> Router {
         ));
     let v1_public = Router::new()
         .route("/health", get(v1_health))
+        .route("/system/health", get(v1_health))
         .route("/system/readiness", get(v1_readiness));
     let v1_auth = Router::new()
         .route("/auth/login", post(login))
@@ -1918,6 +2063,7 @@ pub fn create_router(state: AppState) -> Router {
                 .patch(update_v1_camera)
                 .delete(delete_v1_camera),
         )
+        .route("/cameras/:id/diagnostics", get(get_v1_camera_diagnostics))
         .route("/providers", get(get_v1_providers).post(create_v1_provider))
         .route(
             "/providers/:id",
@@ -1926,6 +2072,7 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(delete_v1_provider),
         )
         .route("/recordings", get(get_v1_recordings))
+        .route("/events", get(get_v1_events))
         .route("/recordings/:id", get(get_v1_recording))
         .route(
             "/recordings/:id/playback-ticket",
@@ -1952,6 +2099,8 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1", v1_public)
         .nest("/api/v1", v1_auth)
         .nest("/api/v1", v1_protected)
-        .fallback_service(ServeDir::new(web_root).not_found_service(ServeFile::new(web_index)))
+        // `fallback` preserves the index file's 200 status for SPA deep links;
+        // `not_found_service` would return the right body with a misleading 404.
+        .fallback_service(ServeDir::new(web_root).fallback(ServeFile::new(web_index)))
         .with_state(state)
 }

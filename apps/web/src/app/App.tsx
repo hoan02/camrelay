@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, Camera, CameraInput, ProviderInput } from "../lib/api";
+import { api, ApiError, Camera, CameraDiagnostics, CameraInput, ProviderInput } from "../lib/api";
 import { Locale, translate } from "../lib/i18n";
 
 type IconName = "grid" | "camera" | "archive" | "settings" | "info" | "plus" | "arrow" | "sun" | "moon" | "logout" | "menu";
@@ -54,7 +54,7 @@ export function App() {
       <Route path="recordings" element={<Recordings />} />
       <Route path="tokens" element={<Tokens />} />
       <Route path="settings" element={<Settings />} />
-      <Route path="about" element={<Placeholder title="About Camrelay" eyebrow="SYSTEM NOTES" description="Technical architecture, security boundaries, and provider capability notes will be documented here." icon="info" />} />
+      <Route path="about" element={<AboutPage />} />
     </Route>
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes></ThemeContext.Provider></LocaleContext.Provider>;
@@ -214,7 +214,25 @@ function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, {
 function formatTime(value: string) { return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(value)); }
 function formatBytes(value: number) { if (!value) return "—"; if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`; return `${(value / (1024 * 1024)).toFixed(1)} MB`; }
 
-function CameraCard({ camera, status, busy, onToggle, onDelete }: { camera: Camera; status: string; busy: boolean; onToggle: () => void; onDelete: () => void }) { const { t } = useLocale(); const running = status === "running"; return <article className="camera-card"><div className="camera-preview"><span className="preview-label">NO LIVE PREVIEW</span><span className="preview-grid" /><span className={`camera-live-badge ${running ? "is-running" : ""}`}><i />{status}</span></div><div className="camera-body"><div className="camera-title"><span className={`camera-status ${running ? "is-running" : ""}`} /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div><button className="icon-button subtle" title={t("common.delete")} onClick={onDelete} disabled={busy}>×</button></div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? t("common.autoStart") : t("common.manualStart")}</span></div><div className="camera-actions"><button className="secondary-button compact" onClick={onToggle} disabled={busy}>{running ? t("common.stopRelay") : t("common.startRelay")}</button></div></div></article>; }
+function CameraCard({ camera, status, busy, onToggle, onDelete }: { camera: Camera; status: string; busy: boolean; onToggle: () => void; onDelete: () => void }) {
+  const { t } = useLocale();
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const diagnostics = useQuery({
+    queryKey: ["camera-diagnostics", camera.id],
+    queryFn: () => api.cameraDiagnostics(camera.id),
+    enabled: diagnosticsOpen,
+  });
+  const running = status === "running";
+  return <>
+    <article className="camera-card"><div className="camera-preview"><span className="preview-label">NO LIVE PREVIEW</span><span className="preview-grid" /><span className={`camera-live-badge ${running ? "is-running" : ""}`}><i />{status}</span></div><div className="camera-body"><div className="camera-title"><span className={`camera-status ${running ? "is-running" : ""}`} /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div><button className="icon-button subtle" title={t("common.delete")} onClick={onDelete} disabled={busy}>×</button></div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? t("common.autoStart") : t("common.manualStart")}</span></div><div className="camera-actions"><button className="secondary-button compact" onClick={onToggle} disabled={busy}>{running ? t("common.stopRelay") : t("common.startRelay")}</button><button className="text-button" onClick={() => setDiagnosticsOpen(true)}>{t("camera.diagnostics")}</button></div></div></article>
+    {diagnosticsOpen && <CameraDiagnosticsDialog diagnostics={diagnostics.data} loading={diagnostics.isLoading} error={diagnostics.isError} onClose={() => setDiagnosticsOpen(false)} />}
+  </>;
+}
+
+function CameraDiagnosticsDialog({ diagnostics, loading, error, onClose }: { diagnostics?: CameraDiagnostics; loading: boolean; error: boolean; onClose: () => void }) {
+  const { t } = useLocale();
+  return <div className="dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="camera-diagnostics-title"><div className="dialog-heading"><div><span className="eyebrow">{t("camera.diagnostics")}</span><h2 id="camera-diagnostics-title">{diagnostics?.provider ?? "Camera"}</h2><p>{diagnostics?.next_action ?? (error ? t("camera.diagnosticsUnavailable") : t("common.loading"))}</p></div><button className="icon-button" onClick={onClose} aria-label={t("common.close")}>×</button></div>{loading && <div className="loading-panel">{t("common.loading")}</div>}{error && <p className="form-error">{t("camera.diagnosticsUnavailable")}</p>}{diagnostics && <div className="diagnostic-grid"><div><span>{t("camera.tunnelStatus")}</span><strong>{diagnostics.tunnel_status}</strong></div><div><span>{diagnostics.provider_configured ? t("camera.providerConfigured") : t("camera.providerMissing")}</span><strong>{diagnostics.provider}</strong></div><div><span>{t("camera.localPort")}</span><strong>{diagnostics.local_port}</strong></div><div><span>{t("camera.rtspPath")}</span><code>{diagnostics.rtsp_path}</code></div>{diagnostics.tunnel_error && <div className="diagnostic-wide"><span>{t("camera.tunnelError")}</span><strong>{diagnostics.tunnel_error}</strong></div>}<div className="diagnostic-wide"><span>{t("camera.nextAction")}</span><strong>{diagnostics.next_action}</strong></div></div>}</section></div>;
+}
 
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
   const { locale } = useLocale();
@@ -235,4 +253,17 @@ function Settings() {
   return <><PageHeading eyebrow={t("page.settings.eyebrow")} title={t("page.settings.title")} description={t("page.settings.description")} /><div className="settings-grid"><section className="panel setting-card"><div className="setting-heading"><span className="setting-icon"><Icon name="info" /></span><div><h2>{t("settings.language.title")}</h2><p>{t("settings.language.description")}</p></div></div><div className="choice-group"><button className={locale === "en" ? "choice active" : "choice"} onClick={() => setLocale("en")}>{t("settings.language.english")}</button><button className={locale === "vi" ? "choice active" : "choice"} onClick={() => setLocale("vi")}>{t("settings.language.vietnamese")}</button></div></section><section className="panel setting-card"><div className="setting-heading"><span className="setting-icon"><Icon name={theme === "dark" ? "moon" : "sun"} /></span><div><h2>{t("settings.theme.title")}</h2><p>{t("settings.theme.description")}</p></div></div><div className="choice-group"><button className={theme === "dark" ? "choice active" : "choice"} onClick={() => setTheme("dark")}>{t("settings.theme.dark")}</button><button className={theme === "light" ? "choice active" : "choice"} onClick={() => setTheme("light")}>{t("settings.theme.light")}</button></div></section><section className="panel setting-card security-setting"><div className="setting-heading"><span className="setting-icon"><Icon name="settings" /></span><div><h2>{t("settings.security.title")}</h2><p>{t("settings.security.description")}</p></div></div><span className="security-mark"><i /> HttpOnly session</span></section></div></>;
 }
 
-function Placeholder({ title, eyebrow, description, icon }: { title: string; eyebrow: string; description: string; icon: IconName }) { return <><PageHeading eyebrow={eyebrow} title={title} description={description} /><div className="panel empty-panel"><span className="empty-icon"><Icon name={icon} /></span><h2>Workspace boundary ready</h2><p>This route is intentionally present now so deep links and future clients have a stable information architecture.</p></div></>; }
+function AboutPage() {
+  const { t } = useLocale();
+  return <>
+    <PageHeading eyebrow={t("about.eyebrow")} title={t("about.title")} description={t("about.description")} />
+    <div className="about-grid">
+      <section className="panel about-card about-wide"><div className="panel-heading"><div><span className="eyebrow">{t("about.architectureTitle")}</span><h2>{t("about.architectureTitle")}</h2></div><Icon name="grid" size={17} /></div><p>{t("about.architectureDescription")}</p><div className="about-flow"><div><Icon name="camera" /><b>{t("about.remoteCamera")}</b><small>{t("about.p2p")}</small></div><span>→</span><div className="about-flow-accent"><Icon name="settings" /><b>{t("about.core")}</b><small>Rust / Axum / Tokio</small></div><span>→</span><div><Icon name="archive" /><b>{t("about.localRtsp")}</b><small>One port per camera</small></div><span>→</span><div><Icon name="grid" /><b>{t("about.clients")}</b><small>{t("about.media")}</small></div></div></section>
+      <section className="panel about-card"><div className="panel-heading"><div><span className="eyebrow">{t("about.securityTitle")}</span><h2>{t("about.securityTitle")}</h2></div><Icon name="settings" size={17} /></div><p>{t("about.securityDescription")}</p><ul className="about-list"><li>{t("about.securityItemOne")}</li><li>{t("about.securityItemTwo")}</li><li>{t("about.securityItemThree")}</li><li>{t("about.securityItemFour")}</li></ul></section>
+      <section className="panel about-card"><div className="panel-heading"><div><span className="eyebrow">{t("about.compatibilityTitle")}</span><h2>{t("about.compatibilityTitle")}</h2></div><Icon name="info" size={17} /></div><p>{t("about.compatibilityDescription")}</p><div className="about-callout"><strong>{t("about.imouTitle")}</strong><span>{t("about.imouDescription")}</span></div></section>
+      <section className="panel about-card"><div className="panel-heading"><div><span className="eyebrow">{t("about.mediaTitle")}</span><h2>{t("about.mediaTitle")}</h2></div><Icon name="archive" size={17} /></div><p>{t("about.mediaDescription")}</p><div className="about-callout"><strong>{t("about.archiveTitle")}</strong><span>{t("about.archiveDescription")}</span></div></section>
+      <section className="panel about-card"><div className="panel-heading"><div><span className="eyebrow">{t("about.contractTitle")}</span><h2>{t("about.contractTitle")}</h2></div><Icon name="arrow" size={17} /></div><p>{t("about.contractDescription")}</p><div className="about-code-lines"><code>POST /api/v1/auth/login</code><code>GET&nbsp; /api/v1/cameras</code><code>POST /api/v1/recordings/:id/playback-ticket</code></div></section>
+      <section className="panel about-card about-wide"><div className="panel-heading"><div><span className="eyebrow">{t("about.roadmapTitle")}</span><h2>{t("about.roadmapTitle")}</h2></div><span className="status-dot"><i />v1 foundation</span></div><p>{t("about.roadmapDescription")}</p><div className="about-roadmap"><span className="done">Foundation</span><span className="active">Console</span><span>Live media</span><span>Operations</span><span>Mobile</span></div></section>
+    </div>
+  </>;
+}

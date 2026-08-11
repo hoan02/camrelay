@@ -84,10 +84,22 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load() -> Self {
-        fs::read_to_string("config.json")
+        let mut config: Self = fs::read_to_string("config.json")
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        // Deployment may select the prebuilt React console without rewriting
+        // the mounted runtime config. Leaving this unset preserves the local
+        // legacy `static/` fallback and the existing config-file contract.
+        if let Ok(web_root) = std::env::var("CAMRELAY_WEB_ROOT") {
+            let web_root = web_root.trim();
+            if !web_root.is_empty() {
+                config.web_root = web_root.to_string();
+            }
+        }
+
+        config
     }
 }
 

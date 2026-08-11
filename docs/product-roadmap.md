@@ -31,11 +31,11 @@ Mobile is a companion experience, not a compressed copy of administrative web fo
 
 | Phase | Outcome |
 | --- | --- |
-| Foundation | workspace boundary, database, API v1, identity and observability |
-| Media | gateway-backed WebRTC/HLS live view and durable recording pipeline |
-| Console | React Console with onboarding, live wall, camera detail and timeline |
-| Operations | archive, retention, diagnostics, backup/restore and audit history |
-| Mobile | Flutter live/event/playback companion using the same API contract |
+| Foundation | **Complete for v1 management surface:** workspace boundary, SQLite, API v1, identity, RBAC, readiness and contract |
+| Media | **In progress:** durable local recording/archive exists; gateway-backed WebRTC/HLS live view remains |
+| Console | **Management surface complete:** React onboarding, camera/provider/token/recording/settings/diagnostics routes; live wall/timeline remain media-gateway work |
+| Operations | **In progress:** archive, diagnostics, backup/restore exist; retention/audit history remain |
+| Mobile | **Scaffolded:** Flutter client foundation follows the same API contract; SDK/build verification and live playback remain |
 
 ## UX principles
 

@@ -8,6 +8,8 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      CAMRELAY_WEB_ROOT: ${CAMRELAY_WEB_ROOT:-/opt/camrelay/apps/web/dist}
     volumes:
       - ./data:/data
       - ./rclone:/data/.config/rclone:ro

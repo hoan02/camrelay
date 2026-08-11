@@ -15,10 +15,11 @@ The image includes FFmpeg and rclone for the recording/archive path. It runs
 as the unprivileged `camrelay` user. Keep port 8080 behind a TLS reverse proxy
 when it is reachable outside the trusted LAN.
 
-The image contains both web builds. Set `web_root` to
-`/opt/camrelay/apps/web/dist` in `data/config.json` only after the React
-console has passed feature-parity checks; leave it as `static` to use the
-legacy console.
+The image contains both web builds. The Compose environment defaults
+`CAMRELAY_WEB_ROOT` to `/opt/camrelay/apps/web/dist`, so the React console is
+served by default without rewriting the mounted `data/config.json`. Set
+`CAMRELAY_WEB_ROOT=/opt/camrelay/static` in `.env` to use the legacy rollback
+console.
 
 ## Backup and restore
 

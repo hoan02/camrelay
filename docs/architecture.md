@@ -56,7 +56,8 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 - Every long-running task accepts cancellation and produces structured logs.
 - API responses are versioned under /api/v1.
 - OpenAPI is a release contract for web and mobile clients.
-- The legacy static console stays until the React Console reaches feature parity.
+- The legacy static console remains as an explicit rollback surface after React
+  feature parity; production Compose now selects React by default.
 
 ## Current migration checkpoint
 

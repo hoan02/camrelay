@@ -28,11 +28,11 @@ read-only preview and automatic timestamped backup.
 
 ## UI transition
 
-1. Build React Console screens against v1 mock/OpenAPI client.
-2. Enable the new console behind an explicit configuration flag.
-3. Verify feature parity for onboarding, camera operations, providers, recordings, and settings.
-4. Make the new console default.
-5. Remove the legacy static UI only in a later release.
+1. Build React Console screens against the v1/OpenAPI client. **Complete.**
+2. Enable the new console behind an explicit configuration flag. **Complete.**
+3. Verify feature parity for onboarding, camera operations, providers, recordings, settings, tokens, and diagnostics. **Complete for the current management surface.**
+4. Make the new console default in the production Compose profile. **In progress; `CAMRELAY_WEB_ROOT` now defaults to the React build.**
+5. Remove the legacy static UI only in a later release after a rollback window and a real-device release smoke test.
 
 ## Release gates
 

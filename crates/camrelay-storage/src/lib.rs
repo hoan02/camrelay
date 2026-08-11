@@ -1,8 +1,8 @@
 //! SQLite persistence foundation for Camrelay.
 //!
-//! The first release keeps the existing JSON files as the operational source
-//! of truth. This crate provides the v1 schema and an idempotent importer so
-//! the cutover can be tested and rolled back without changing relay behavior.
+//! SQLite is the v1 operational source of truth when database mode is enabled.
+//! Legacy JSON remains an idempotent import and rollback source so the cutover
+//! can be tested without changing the known relay behavior.
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},

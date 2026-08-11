@@ -54,6 +54,26 @@ export type ProviderInput = {
 
 export type Tunnel = { id: string; status: string };
 export type ApiToken = { id: string; name: string; expires_at: string | null; enabled: boolean };
+export type CameraDiagnostics = {
+  camera_id: string;
+  provider: string;
+  provider_configured: boolean;
+  tunnel_status: "stopped" | "starting" | "running" | "error" | string;
+  tunnel_error: string | null;
+  local_port: number;
+  rtsp_path: string;
+  next_action: string;
+};
+export type EventSummary = {
+  id: string;
+  kind: string;
+  camera_id: string;
+  camera_name: string;
+  occurred_at: string;
+  severity: string;
+  message: string;
+  source: string;
+};
 
 export type CurrentUser = {
   username: string;
@@ -115,6 +135,8 @@ export const api = {
   updateProvider: (id: string, input: Partial<ProviderInput>) => request<Provider>(`/api/v1/providers/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteProvider: (id: string) => request<void>(`/api/v1/providers/${id}`, { method: "DELETE" }),
   tunnels: () => request<Tunnel[]>("/api/v1/tunnels"),
+  cameraDiagnostics: (id: string) => request<CameraDiagnostics>(`/api/v1/cameras/${id}/diagnostics`),
+  events: () => request<EventSummary[]>("/api/v1/events"),
   startCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/start`, { method: "POST" }),
   stopCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/stop`, { method: "POST" }),
   tokens: () => request<ApiToken[]>("/api/v1/tokens"),

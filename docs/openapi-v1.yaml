@@ -131,6 +131,20 @@ paths:
       responses:
         '204':
           description: Camera deleted
+  /api/v1/cameras/{camera_id}/diagnostics:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      summary: Get secret-free relay diagnostics
+      responses:
+        '200':
+          description: Camera and tunnel diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraDiagnostics'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/cameras/{camera_id}/start:
     post:
       summary: Start a camera relay
@@ -234,6 +248,20 @@ paths:
       responses:
         '200':
           description: Updated recording status
+  /api/v1/events:
+    get:
+      summary: List normalized activity events
+      description: The current implementation projects persisted recording segments as events.
+      responses:
+        '200':
+          description: Activity events
+  /api/v1/system/health:
+    get:
+      security: []
+      summary: Detailed service health alias
+      responses:
+        '200':
+          description: Service health
   /api/v1/tunnels:
     get:
       summary: List secret-free tunnel lifecycle status
@@ -339,6 +367,18 @@ components:
         port: { type: integer, minimum: 1, maximum: 65535 }
         local_port: { type: integer, minimum: 1, maximum: 65535 }
         auto_start: { type: boolean }
+    CameraDiagnostics:
+      type: object
+      required: [camera_id, provider, provider_configured, tunnel_status, local_port, rtsp_path, next_action]
+      properties:
+        camera_id: { type: string }
+        provider: { type: string }
+        provider_configured: { type: boolean }
+        tunnel_status: { type: string, enum: [stopped, starting, running, error] }
+        tunnel_error: { type: string, nullable: true }
+        local_port: { type: integer, minimum: 1, maximum: 65535 }
+        rtsp_path: { type: string }
+        next_action: { type: string }
     ProviderInput:
       allOf:
         - $ref: '#/components/schemas/ProviderPatch'
