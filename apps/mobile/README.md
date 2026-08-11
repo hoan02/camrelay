@@ -8,6 +8,7 @@ administrative web console.
 
 - sign in to a Camrelay appliance over HTTPS;
 - keep the bearer token in platform secure storage;
+- rotate an expiring bearer session once through the v1 refresh endpoint;
 - show camera state and start/stop controls for authorized users;
 - list recordings and request ticket-protected playback;
 - keep all P2P platform, camera RTSP, and archive credentials on the server.
@@ -41,4 +42,4 @@ deep link.
   still needs verification with a running Camrelay appliance;
 - WebRTC remains a future adapter because the backend currently issues HLS
   tickets only;
-- Flutter SDK verification is pending on the development machine.
+- automatic refresh and media playback still need Flutter SDK/device verification on the development machine.

@@ -28,6 +28,7 @@ class CamrelayApi {
   final String _baseUrl;
   final http.Client _client;
   final FlutterSecureStorage _secureStorage;
+  Future<bool>? _refreshInFlight;
 
   static String _normalizeBaseUrl(String value) {
     final trimmed = value.trim();
@@ -56,7 +57,7 @@ class CamrelayApi {
 
   Future<void> logout() async {
     try {
-      await _request('POST', '/api/v1/auth/logout');
+      await _request('POST', '/api/v1/auth/logout', allowRefresh: false);
     } finally {
       await _secureStorage.delete(key: _tokenKey);
     }
@@ -90,23 +91,59 @@ class CamrelayApi {
 
   String resolveUrl(String path) => _uri(path).toString();
 
-  Future<Map<String, dynamic>> _request(String method, String path) async {
+  Future<Map<String, dynamic>> _request(String method, String path, {bool allowRefresh = true}) async {
     final token = await _secureStorage.read(key: _tokenKey);
     final headers = <String, String>{'accept': 'application/json'};
     if (token != null && token.isNotEmpty) {
       headers['authorization'] = 'Bearer $token';
     }
 
-    final response = switch (method) {
-      'POST' => await _client.post(_uri(path), headers: headers),
-      'GET' => await _client.get(_uri(path), headers: headers),
-      _ => throw ArgumentError.value(method, 'method', 'Unsupported request method'),
-    };
+    final response = await _send(method, path, headers);
+    if (response.statusCode == 401 && allowRefresh && token != null && token.isNotEmpty && await _refreshOnce()) {
+      return _request(method, path, allowRefresh: false);
+    }
     final payload = _decode(response);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw CamrelayApiException(response.statusCode, _message(payload));
     }
     return payload;
+  }
+
+  Future<http.Response> _send(String method, String path, Map<String, String> headers) => switch (method) {
+        'POST' => _client.post(_uri(path), headers: headers),
+        'GET' => _client.get(_uri(path), headers: headers),
+        _ => throw ArgumentError.value(method, 'method', 'Unsupported request method'),
+      };
+
+  Future<bool> _refreshOnce() async {
+    final inFlight = _refreshInFlight;
+    if (inFlight != null) return inFlight;
+    final refresh = _refreshAccessToken();
+    _refreshInFlight = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (identical(_refreshInFlight, refresh)) _refreshInFlight = null;
+    }
+  }
+
+  Future<bool> _refreshAccessToken() async {
+    final token = await _secureStorage.read(key: _tokenKey);
+    if (token == null || token.isEmpty) return false;
+    try {
+      final response = await _client.post(
+        _uri('/api/v1/auth/refresh'),
+        headers: {'accept': 'application/json', 'authorization': 'Bearer $token'},
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) return false;
+      final payload = _decode(response);
+      final nextToken = payload['token'] as String?;
+      if (nextToken == null || nextToken.isEmpty) return false;
+      await _secureStorage.write(key: _tokenKey, value: nextToken);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Uri _uri(String path) => Uri.parse('$_baseUrl$path');

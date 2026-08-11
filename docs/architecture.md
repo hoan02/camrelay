@@ -45,7 +45,7 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 
 - The server is the only component allowed to read vendor and camera credentials.
 - User passwords use Argon2id. Provider/device secrets use an encrypted envelope keyed by `CAMRELAY_SECRET_KEY`; the key is never stored in SQLite or the repository. Refresh sessions are server-side and revocable.
-- Web uses secure HttpOnly session cookies. Mobile uses a bearer session token in platform secure storage; automatic refresh rotation remains a client milestone.
+- Web uses secure HttpOnly session cookies. Mobile uses a bearer session token in platform secure storage and rotates it once through the v1 refresh endpoint after a 401.
 - A live/playback URL is a short-lived bearer ticket scoped to one camera or recording; issuance still requires an authenticated API client.
 - Mobile HLS playback consumes the same ticket URL through `video_player`; the API bearer is never appended to the media URL. WebRTC remains an adapter boundary, not an unimplemented claim in the current transport.
 - SQLite in WAL mode is the default single-appliance database. SQLx migrations are the schema truth.
