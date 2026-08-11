@@ -82,11 +82,16 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
         return unauthorized_response();
     };
 
+    let request_path = req
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.0.path().to_owned())
+        .unwrap_or_else(|| req.uri().path().to_owned());
     let scoped_ticket_request = req.method() == Method::POST
         && (req.uri().path().ends_with("/playback-ticket")
             || req.uri().path().ends_with("/live-ticket"));
     if req.method() == Method::GET
-        && legacy_secret_read_path(req.uri().path())
+        && legacy_secret_read_path(&request_path)
         && !is_admin_role(&principal.role)
     {
         return (
@@ -116,11 +121,6 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
 
     req.extensions_mut().insert(principal.clone());
     let method = req.method().clone();
-    let path = req
-        .extensions()
-        .get::<OriginalUri>()
-        .map(|uri| uri.0.path().to_owned())
-        .unwrap_or_else(|| req.uri().path().to_owned());
     let response = next.run(req).await;
     if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
         if let Some(storage) = &state.storage {
@@ -128,7 +128,7 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
                 .record_audit(
                     &principal.username,
                     method.as_str(),
-                    &path,
+                    &request_path,
                     response.status().as_u16(),
                 )
                 .await;
@@ -155,7 +155,14 @@ fn is_admin_role(role: &str) -> bool {
 fn legacy_secret_read_path(path: &str) -> bool {
     matches!(
         path,
-        "/api/brands" | "/api/cameras" | "/api/cameras/all" | "/api/tokens"
+        "/api/brands"
+            | "/api/cameras"
+            | "/api/cameras/all"
+            | "/api/tokens"
+            | "/brands"
+            | "/cameras"
+            | "/cameras/all"
+            | "/tokens"
     )
 }
 
@@ -2822,6 +2829,7 @@ mod tests {
         assert!(legacy_secret_read_path("/api/cameras"));
         assert!(legacy_secret_read_path("/api/cameras/all"));
         assert!(legacy_secret_read_path("/api/tokens"));
+        assert!(legacy_secret_read_path("/cameras"));
         assert!(!legacy_secret_read_path("/api/v1/providers"));
         assert!(!legacy_secret_read_path("/api/recordings"));
     }
