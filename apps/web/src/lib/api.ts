@@ -43,6 +43,8 @@ export type Provider = {
   main_server: string;
 };
 
+export type Tunnel = { id: string; status: string };
+
 export type ApiErrorBody = {
   code?: string;
   message?: string;
@@ -87,4 +89,7 @@ export const api = {
   health: () => request<Health>("/api/v1/health"),
   recordings: () => request<Recording[]>("/api/v1/recordings"),
   providers: () => request<Provider[]>("/api/v1/providers"),
+  tunnels: () => request<Tunnel[]>("/api/v1/tunnels"),
+  startCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/start`, { method: "POST" }),
+  stopCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/stop`, { method: "POST" }),
 };

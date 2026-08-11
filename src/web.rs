@@ -358,6 +358,29 @@ async fn get_v1_providers(State(state): State<AppState>) -> impl IntoResponse {
     .into_response()
 }
 
+#[derive(Serialize)]
+struct TunnelSummary {
+    id: String,
+    status: String,
+}
+
+async fn get_v1_tunnels(State(state): State<AppState>) -> impl IntoResponse {
+    Json(
+        load_cameras()
+            .into_iter()
+            .map(|camera| TunnelSummary {
+                id: camera.id.clone(),
+                status: match state.tunnel_manager.status(&camera.id) {
+                    TunnelStatus::Running => "running".to_string(),
+                    TunnelStatus::Starting => "starting".to_string(),
+                    TunnelStatus::Error(error) => format!("error: {error}"),
+                    TunnelStatus::Stopped => "stopped".to_string(),
+                },
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 async fn get_brands_handler() -> impl IntoResponse {
     Json(load_brands())
 }
@@ -945,6 +968,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
         .route("/providers", get(get_v1_providers))
         .route("/recordings", get(get_v1_recordings))
+        .route("/tunnels", get(get_v1_tunnels))
+        .route("/cameras/:id/start", post(start_tunnel))
+        .route("/cameras/:id/stop", post(stop_tunnel))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

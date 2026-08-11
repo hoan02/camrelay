@@ -30,6 +30,9 @@ Implemented in the current migration checkpoint:
     POST   /api/v1/cameras                authenticated camera onboarding in legacy mode
     GET    /api/v1/providers               authenticated, secret-free summaries
     GET    /api/v1/recordings              authenticated, secret-free summaries
+    GET    /api/v1/tunnels                 authenticated, secret-free lifecycle status
+    POST   /api/v1/cameras/{camera_id}/start
+    POST   /api/v1/cameras/{camera_id}/stop
 
 The endpoints below are the target contract and remain pending until their
 storage and authorization behavior is migrated from the legacy handlers:
