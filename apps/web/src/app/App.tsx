@@ -28,6 +28,7 @@ const navItems: Array<{ to: string; label: string; icon: IconName }> = [
   { to: "/cameras", label: "nav.cameras", icon: "camera" },
   { to: "/providers", label: "nav.providers", icon: "settings" },
   { to: "/recordings", label: "nav.recordings", icon: "archive" },
+  { to: "/tokens", label: "nav.tokens", icon: "settings" },
 ];
 
 type Theme = "dark" | "light";
@@ -51,6 +52,7 @@ export function App() {
       <Route path="cameras" element={<Cameras />} />
       <Route path="providers" element={<Providers />} />
       <Route path="recordings" element={<Recordings />} />
+      <Route path="tokens" element={<Tokens />} />
       <Route path="settings" element={<Settings />} />
       <Route path="about" element={<Placeholder title="About Camrelay" eyebrow="SYSTEM NOTES" description="Technical architecture, security boundaries, and provider capability notes will be documented here." icon="info" />} />
     </Route>
@@ -178,6 +180,20 @@ function LegacyRecordings() {
   return <><PageHeading eyebrow="MEDIA LIBRARY" title="Recordings" description="Closed segments, local retention, and the path to your cloud archive." />{isLoading && <div className="panel loading-panel">Loading recording index…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>Recording API is not connected</h2><p>The new media surface is wired to the v1 contract and will remain read-only until archive controls migrate.</p></div>}{recordings && recordings.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>No closed segments</h2><p>Once recording is enabled and a segment closes, it will appear here with its retention and archive state.</p></div>}{recordings && recordings.length > 0 && <div className="panel recordings-list"><div className="recordings-header"><span>SEGMENT</span><span>CAMERA</span><span>STATUS</span><span>SIZE</span></div>{recordings.map(recording => <div className="recording-row" key={recording.id}><div><b>{formatDate(recording.started_at)}</b><small>{recording.kind}{recording.ended_at ? ` · ${formatTime(recording.ended_at)}` : " · in progress"}</small></div><span>{recording.camera_name}</span><span className={`recording-status ${recording.status}`}>{recording.archive_available ? "Archived" : recording.status}</span><span>{formatBytes(recording.bytes)}</span></div>)}</div>}</>;
 }
 
+function Tokens() {
+  const { data: tokens, isLoading, isError } = useQuery({ queryKey: ["tokens"], queryFn: api.tokens });
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [newSecret, setNewSecret] = useState("");
+  const create = useMutation({
+    mutationFn: () => api.createToken({ name, expires_at: null, enabled: true }),
+    onSuccess: async result => { setNewSecret(result.token); setName(""); await queryClient.invalidateQueries({ queryKey: ["tokens"] }); },
+  });
+  const toggle = useMutation({ mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => api.updateToken(id, { enabled }), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["tokens"] }); } });
+  const remove = useMutation({ mutationFn: api.deleteToken, onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["tokens"] }); } });
+  return <><PageHeading eyebrow="ACCESS CONTROL" title="API tokens" description="Create scoped service credentials for Frigate, FFmpeg, and other trusted clients." /><section className="panel token-create"><div><span className="eyebrow">NEW SERVICE CREDENTIAL</span><h2>Create an API token</h2><p>The raw secret is shown once. Store it in the client that will call Camrelay.</p></div><div className="token-create-form"><input value={name} onChange={event => setName(event.target.value)} placeholder="Frigate recorder" aria-label="Token name" /><button className="primary-button compact" onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}>Create token</button></div>{newSecret && <div className="token-secret"><span>Copy this secret now</span><code>{newSecret}</code><button className="text-button" onClick={() => navigator.clipboard?.writeText(newSecret)}>Copy</button></div>}{create.error && <p className="form-error">{create.error instanceof ApiError ? create.error.message : "Could not create token."}</p>}</section>{isLoading && <div className="panel loading-panel">Loading API tokens...</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>Token API is not connected</h2><p>Connect the versioned API to manage service credentials.</p></div>}{tokens && tokens.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>No service tokens</h2><p>Create one for an integration such as Frigate.</p></div>}{tokens && tokens.length > 0 && <div className="token-grid">{tokens.map(token => <article className="panel token-card" key={token.id}><div><h2>{token.name}</h2><small>{token.expires_at ? `Expires ${formatDate(token.expires_at)}` : "No expiry"}</small></div><span className={`token-state ${token.enabled ? "enabled" : "disabled"}`}><i />{token.enabled ? "Enabled" : "Disabled"}</span><div className="token-actions"><button className="text-button" onClick={() => toggle.mutate({ id: token.id, enabled: !token.enabled })} disabled={toggle.isPending}>{token.enabled ? "Disable" : "Enable"}</button><button className="text-button danger" onClick={() => { if (window.confirm("Revoke this API token?")) remove.mutate(token.id); }} disabled={remove.isPending}>Revoke</button></div></article>)}</div>}</>;
+}
+
 function Providers() {
   const { data: providers, isLoading, isError } = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const queryClient = useQueryClient();
@@ -209,6 +225,7 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow: string;
     "DEVICE FLEET|Cameras": ["ĐỘI CAMERA", "Camera", "Quản lý thiết bị từ xa và các cổng relay cục bộ tương ứng."],
     "P2P PROFILES|Providers": ["HỒ SƠ P2P", "Nhà cung cấp", "Hồ sơ signaling của relay. Secret ở lại trên máy chủ; khả năng tương thích cần được kiểm thử thực tế."],
     "MEDIA LIBRARY|Recordings": ["THƯ VIỆN MEDIA", "Bản ghi", "Các phân đoạn đã đóng, thời hạn lưu cục bộ và lộ trình lên cloud."],
+    "ACCESS CONTROL|API tokens": ["KIỂM SOÁT TRUY CẬP", "API token", "Tạo thông tin truy cập dịch vụ cho Frigate, FFmpeg và các client tin cậy khác."],
   } as Record<string, [string, string, string]>)[`${eyebrow}|${title}`] : undefined;
   const copy = localized ?? [eyebrow, title, description];
   return <div className="page-heading"><div><span className="eyebrow">{copy[0]}</span><h1>{copy[1]}</h1><p>{copy[2]}</p></div>{action}</div>;
