@@ -6,6 +6,9 @@ const state = {
   cameras: [],
   brands: [],
   tokens: [],
+  recordings: [],
+  recordingConfig: null,
+  selectedRecordingId: null,
   tunnels: {},
   activeView: 'dashboard',
   pendingView: null,
@@ -25,7 +28,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const t = (key, vars = {}) => Object.entries(vars).reduce((value, [name, replacement]) => value.replace(`{${name}}`, replacement), state.locale[key] || key);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
-const viewPaths = { dashboard: '/dashboard', cameras: '/cameras', providers: '/providers', tokens: '/tokens', settings: '/settings', about: '/about' };
+const viewPaths = { dashboard: '/dashboard', cameras: '/cameras', recordings: '/recordings', providers: '/providers', tokens: '/tokens', settings: '/settings', about: '/about' };
 const pathViews = Object.fromEntries(Object.entries(viewPaths).map(([view, path]) => [path, view]));
 
 function viewFromLocation() {
@@ -65,7 +68,7 @@ async function loadLocale() {
   $$('[data-i18n-placeholder]').forEach(element => { element.placeholder = t(element.dataset.i18nPlaceholder); });
   $('#language').value = state.lang;
   applyTheme(state.theme);
-  const titles = { dashboard: 'overview', cameras: 'cameras', providers: 'providersTitle', tokens: 'apiTokensTitle', settings: 'settings', about: 'technicalGuide' };
+  const titles = { dashboard: 'overview', cameras: 'cameras', recordings: 'recordings', providers: 'providersTitle', tokens: 'apiTokensTitle', settings: 'settings', about: 'technicalGuide' };
   $('#page-title').textContent = t(titles[state.activeView] || 'overview');
 }
 
@@ -85,10 +88,11 @@ function setView(view, updateUrl = true) {
   $('#token-form').classList.add('hidden');
   $$('.nav-button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   $$('.view').forEach(section => section.classList.toggle('active', section.id === `view-${view}`));
-  const titles = { dashboard: 'overview', cameras: 'cameras', providers: 'providersTitle', tokens: 'apiTokensTitle', settings: 'settings', about: 'technicalGuide' };
+  const titles = { dashboard: 'overview', cameras: 'cameras', recordings: 'recordings', providers: 'providersTitle', tokens: 'apiTokensTitle', settings: 'settings', about: 'technicalGuide' };
   $('#page-title').textContent = t(titles[view] || 'overview');
   if (view === 'dashboard') renderDashboard();
   if (view === 'cameras') renderCameras();
+  if (view === 'recordings') { loadRecordings(); renderRecordings(); }
   if (view === 'providers') renderProviders();
   if (view === 'tokens') loadTokens();
 }
@@ -136,7 +140,7 @@ async function api(path, options = {}) {
 }
 
 async function loadAll() {
-  await Promise.all([loadCameras(), loadBrands(), loadTunnels()]);
+  await Promise.all([loadCameras(), loadBrands(), loadTunnels(), loadRecordings()]);
   renderAll();
 }
 
@@ -162,6 +166,13 @@ async function loadTunnels() {
   renderAll();
 }
 
+async function loadRecordings() {
+  const [recordingsResponse, configResponse] = await Promise.all([api('/recordings?limit=200'), api('/recordings/config')]);
+  if (recordingsResponse?.ok) state.recordings = await recordingsResponse.json();
+  if (configResponse?.ok) state.recordingConfig = await configResponse.json();
+  renderRecordings();
+}
+
 function getStatus(cameraId) {
   const status = state.tunnels[cameraId]?.status || 'stopped';
   if (status.startsWith('error')) return 'error';
@@ -176,6 +187,7 @@ function statusBadge(status) {
 function renderAll() {
   renderDashboard();
   renderCameras();
+  renderRecordings();
   renderProviders();
   if (state.activeView === 'tokens') renderTokens();
 }
@@ -226,6 +238,84 @@ function bindDynamicActions(container) {
   container.querySelectorAll('[data-action="toggle-tunnel"]').forEach(button => button.addEventListener('click', () => toggleTunnel(button.dataset.id)));
   container.querySelectorAll('[data-action="edit-camera"]').forEach(button => button.addEventListener('click', () => openCameraWizard(button.dataset.id)));
   container.querySelectorAll('[data-action="delete-camera"]').forEach(button => button.addEventListener('click', () => deleteCamera(button.dataset.id)));
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return (bytes / Math.pow(1024, index)).toFixed(index ? 1 : 0) + ' ' + units[index];
+}
+
+function formatRecordingDate(value) {
+  if (!value) return '—';
+  return new Date(value).toLocaleString(state.lang === 'vi' ? 'vi-VN' : 'en-US', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function recordingStatusLabel(status) {
+  return t({ local: 'localOnly', uploading: 'uploading', archived: 'archived', failed: 'failed' }[status] || status);
+}
+
+function renderRecordings() {
+  const cameraFilter = $('#recording-camera-filter');
+  const statusFilter = $('#recording-status-filter');
+  const list = $('#recording-list');
+  if (!cameraFilter || !statusFilter || !list) return;
+  const selectedCamera = cameraFilter.value;
+  cameraFilter.innerHTML = '<option value="">' + escapeHtml(t('allCameras')) + '</option>' + state.cameras.map(camera => '<option value="' + escapeHtml(camera.id) + '">' + escapeHtml(camera.name) + '</option>').join('');
+  cameraFilter.value = state.cameras.some(camera => camera.id === selectedCamera) ? selectedCamera : '';
+  const filtered = state.recordings.filter(record => (!cameraFilter.value || record.camera_id === cameraFilter.value) && (!statusFilter.value || record.status === statusFilter.value));
+  $('#recording-count').textContent = filtered.length;
+  if (!filtered.length) {
+    list.innerHTML = '<div class="card empty-state"><div class="empty-icon">R</div><h3>' + escapeHtml(t('noRecordings')) + '</h3><p>' + escapeHtml(state.recordingConfig?.enabled ? t('noRecordingsYet') : t('recordingDisabled')) + '</p></div>';
+    return;
+  }
+  list.innerHTML = filtered.map(record => {
+    const canArchive = record.status === 'local' || record.status === 'failed';
+    const error = record.error ? '<div class="recording-error">' + escapeHtml(record.error) + '</div>' : '';
+    const archive = canArchive && state.recordingConfig?.archive_configured ? '<button class="button-secondary button-small" data-action="archive-recording" data-id="' + escapeHtml(record.id) + '"><span class="button-icon">↑</span>' + escapeHtml(t('archiveNow')) + '</button>' : '';
+    return '<article class="card recording-card ' + (state.selectedRecordingId === record.id ? 'selected' : '') + '">' +
+      '<div class="recording-card-heading"><div><span class="eyebrow">' + escapeHtml(record.camera_name) + '</span><h3>' + escapeHtml(formatRecordingDate(record.started_at)) + '</h3></div><span class="compatibility ' + escapeHtml(record.status) + '">' + escapeHtml(recordingStatusLabel(record.status)) + '</span></div>' +
+      '<div class="recording-meta"><span>' + escapeHtml(formatBytes(record.bytes)) + '</span><span>' + escapeHtml(t(record.kind)) + '</span>' + (record.ended_at ? '<span>' + escapeHtml(t('endedAt')) + ': ' + escapeHtml(formatRecordingDate(record.ended_at)) + '</span>' : '') + '</div>' +
+      error + '<div class="card-actions"><button class="button-primary button-small" data-action="play-recording" data-id="' + escapeHtml(record.id) + '"><span class="button-icon">▶</span>' + escapeHtml(t('play')) + '</button>' + archive + '</div></article>';
+  }).join('');
+  list.querySelectorAll('[data-action="play-recording"]').forEach(button => button.addEventListener('click', () => openRecording(button.dataset.id)));
+  list.querySelectorAll('[data-action="archive-recording"]').forEach(button => button.addEventListener('click', () => archiveRecording(button.dataset.id)));
+}
+
+async function openRecording(id) {
+  const record = state.recordings.find(item => item.id === id);
+  if (!record) return;
+  const response = await api('/recordings/' + id + '/playback-ticket', { method: 'POST' });
+  if (!response?.ok) return;
+  const ticket = await response.json();
+  state.selectedRecordingId = id;
+  $('#recording-player').classList.remove('hidden');
+  $('#player-title').textContent = record.camera_name;
+  $('#player-meta').textContent = formatRecordingDate(record.started_at) + ' · ' + formatBytes(record.bytes);
+  const video = $('#recording-video');
+  video.src = ticket.url;
+  video.load();
+  renderRecordings();
+}
+
+function closeRecordingPlayer() {
+  state.selectedRecordingId = null;
+  const video = $('#recording-video');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  $('#recording-player').classList.add('hidden');
+  renderRecordings();
+}
+
+async function archiveRecording(id) {
+  const response = await api('/recordings/' + id + '/archive', { method: 'POST' });
+  if (!response?.ok) return;
+  const saved = await response.json();
+  state.recordings = state.recordings.map(record => record.id === id ? saved : record);
+  renderRecordings();
+  toast(t('archiveStarted'));
 }
 
 function renderProviders() {
@@ -406,8 +496,13 @@ $('#theme-toggle').addEventListener('click', () => applyTheme(state.theme === 'd
 $$('.nav-button').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
 $('[data-view-link="cameras"]').addEventListener('click', () => setView('cameras'));
 $('[data-view-link="about"]').addEventListener('click', () => setView('about'));
+$('[data-view-link="recordings"]')?.addEventListener('click', () => setView('recordings'));
 $('#logout').addEventListener('click', logout);
 $('#add-camera').addEventListener('click', () => openCameraWizard());
+$('#refresh-recordings').addEventListener('click', loadRecordings);
+$('#recording-camera-filter').addEventListener('change', renderRecordings);
+$('#recording-status-filter').addEventListener('change', renderRecordings);
+$('#close-player').addEventListener('click', closeRecordingPlayer);
 $('#wizard-next').addEventListener('click', nextWizardStep);
 $('#wizard-back').addEventListener('click', () => { if (state.cameraStep > 1) { state.cameraStep -= 1; renderWizardStep(); } });
 $('#wizard-cancel').addEventListener('click', closeWizard);

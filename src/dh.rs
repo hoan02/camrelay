@@ -15,7 +15,10 @@ pub async fn probe_provider(
     app_username: &str,
     app_userkey: &str,
 ) -> Result<String, String> {
-    if main_server.trim().is_empty() || app_username.trim().is_empty() || app_userkey.trim().is_empty() {
+    if main_server.trim().is_empty()
+        || app_username.trim().is_empty()
+        || app_userkey.trim().is_empty()
+    {
         return Err("Provider endpoint and platform credentials are required.".to_string());
     }
 
@@ -49,7 +52,10 @@ pub async fn probe_provider(
         .map_err(|_| "Provider probe timed out after 8 seconds.".to_string())?
         .map_err(|e| format!("Could not read provider response: {e}"))?;
     let response = String::from_utf8_lossy(&buffer[..received]);
-    let status = response.lines().next().unwrap_or("Unknown provider response");
+    let status = response
+        .lines()
+        .next()
+        .unwrap_or("Unknown provider response");
     let code = status
         .split_whitespace()
         .nth(1)
@@ -61,7 +67,6 @@ pub async fn probe_provider(
     }
     Ok(format!("Provider probe accepted ({status})."))
 }
-
 
 fn ip_to_bytes(ip: &str) -> Vec<u8> {
     let addr: SocketAddrV4 = ip.parse().unwrap();
@@ -87,7 +92,9 @@ pub async fn p2p_handshake(
 
     socket.connect(main_server).await.unwrap();
 
-    socket.dh_request("/probe/p2psrv", None, &mut cseq, app_username, app_userkey).await;
+    socket
+        .dh_request("/probe/p2psrv", None, &mut cseq, app_username, app_userkey)
+        .await;
     socket.dh_read().await;
 
     socket
@@ -101,7 +108,9 @@ pub async fn p2p_handshake(
         .await;
     let p2psrv = &socket.dh_read().await.body.unwrap()["body/US"];
 
-    socket.dh_request("/online/relay", None, &mut cseq, app_username, app_userkey).await;
+    socket
+        .dh_request("/online/relay", None, &mut cseq, app_username, app_userkey)
+        .await;
     let relay = &socket.dh_read().await.body.unwrap()["body/Address"];
 
     let socket2 = UdpSocket::bind("0.0.0.0:0").await.unwrap();
@@ -148,7 +157,9 @@ pub async fn p2p_handshake(
 
     socket2.connect(relay).await.unwrap();
 
-    socket2.dh_request("/relay/agent", None, &mut cseq, app_username, app_userkey).await;
+    socket2
+        .dh_request("/relay/agent", None, &mut cseq, app_username, app_userkey)
+        .await;
     let data = socket2.dh_read().await.body.unwrap();
     let token = &data["body/Token"];
     let agent = &data["body/Agent"];
@@ -442,7 +453,14 @@ impl DHResponse {
 
 #[async_trait]
 trait DHP2P {
-    async fn dh_request(&self, path: &str, body: Option<&str>, seq: &mut u32, username: &str, userkey: &str);
+    async fn dh_request(
+        &self,
+        path: &str,
+        body: Option<&str>,
+        seq: &mut u32,
+        username: &str,
+        userkey: &str,
+    );
     async fn dh_read_raw(&self) -> DHResponse;
 
     async fn dh_read(&self) -> DHResponse {
@@ -456,7 +474,14 @@ trait DHP2P {
 
 #[async_trait]
 impl DHP2P for UdpSocket {
-    async fn dh_request(&self, path: &str, body: Option<&str>, seq: &mut u32, username: &str, userkey: &str) {
+    async fn dh_request(
+        &self,
+        path: &str,
+        body: Option<&str>,
+        seq: &mut u32,
+        username: &str,
+        userkey: &str,
+    ) {
         let method = match body {
             Some(_) => "DHPOST",
             None => "DHGET",

@@ -25,6 +25,7 @@
       <nav class="nav">
         <button class="nav-button active" data-view="dashboard"><span class="nav-icon">⌂</span><span class="nav-label" data-i18n="dashboard">Dashboard</span></button>
         <button class="nav-button" data-view="cameras"><span class="nav-icon">◉</span><span class="nav-label" data-i18n="cameras">Cameras</span></button>
+        <button class="nav-button" data-view="recordings"><span class="nav-icon">R</span><span class="nav-label" data-i18n="recordings">Recordings</span></button>
         <button class="nav-button" data-view="providers"><span class="nav-icon">◇</span><span class="nav-label" data-i18n="providers">Providers</span></button>
         <button class="nav-button" data-view="tokens"><span class="nav-icon">▣</span><span class="nav-label" data-i18n="tokens">API tokens</span></button>
         <button class="nav-button" data-view="settings"><span class="nav-icon">⚙</span><span class="nav-label" data-i18n="settings">Settings</span></button>
@@ -73,6 +74,22 @@
       </section>
 
       <section id="camera-wizard" class="card panel form-card hidden"><div class="section-heading"><div><h2 id="wizard-title" data-i18n="setupCamera">Set up camera</h2><p data-i18n="providerHelp">Choose a configured provider profile. Compatibility is verified per model and firmware.</p></div></div><div class="stepper"><div class="step active" data-step="1"><span class="step-number">1</span><span data-i18n="stepProvider">Provider</span></div><div class="step" data-step="2"><span class="step-number">2</span><span data-i18n="stepDevice">Device</span></div><div class="step" data-step="3"><span class="step-number">3</span><span data-i18n="stepStream">Local stream</span></div></div><div class="wizard-step" data-step="1"><h3 class="form-title" data-i18n="chooseProvider">Choose a provider</h3><p class="form-help" data-i18n="providerHelp">Choose a configured provider profile.</p><div id="provider-options" class="provider-options"></div></div><div class="wizard-step hidden" data-step="2"><div class="form-section-heading"><span class="form-section-icon">C</span><div><h3 data-i18n="cameraCredentials">Camera credentials</h3><p data-i18n="cameraCredentialsText">These authenticate against the camera RTSP service. They are separate from platform credentials.</p></div></div><div class="form-grid"><div class="field"><label data-i18n="cameraName">Camera name</label><input id="camera-name"></div><div class="field"><label data-i18n="serialNumber">Serial number</label><input id="camera-serial"></div><div class="field"><label data-i18n="cameraUsername">Camera username</label><input id="camera-username" value="admin"></div><div class="field"><label data-i18n="cameraPassword">Camera password</label><input id="camera-password" type="password"></div><div class="field"><label data-i18n="remoteRtspPort">Remote RTSP port</label><input id="remote-port" type="number" value="554"></div></div></div><div class="wizard-step hidden" data-step="3"><h3 class="form-title" data-i18n="localStreamSettings">Local stream settings</h3><div class="form-grid"><div class="field"><label data-i18n="localPort">Local port</label><input id="local-port" type="number" value="8551"></div><label class="checkbox-field"><input id="auto-start" type="checkbox"><span data-i18n="autoStart">Start automatically with the service</span></label></div><div class="warning" data-i18n="testNotAvailable">Stream testing will be available after the tunnel is running.</div></div><div class="form-footer"><button id="wizard-back" class="button-secondary" data-i18n="back" disabled>Back</button><div class="form-footer-right"><button id="wizard-cancel" class="button-ghost" data-i18n="cancel">Cancel</button><button id="wizard-next" class="button-primary" data-i18n="next">Continue</button></div></div></section>
+      <section id="view-recordings" class="view">
+        <div class="section-heading"><div><h2 data-i18n="recordings">Recordings</h2><p data-i18n="recordingsSubtitle">Review closed segments locally or from the configured Google Drive archive.</p></div><button id="refresh-recordings" class="button-secondary"><span class="button-icon">R</span><span data-i18n="refresh">Refresh</span></button></div>
+        <div class="recording-toolbar card panel">
+          <div class="field"><label data-i18n="cameraFilter">Camera</label><select id="recording-camera-filter"><option value="" data-i18n="allCameras">All cameras</option></select></div>
+          <div class="field"><label data-i18n="recordingStatus">Status</label><select id="recording-status-filter"><option value="" data-i18n="allStatuses">All statuses</option><option value="local" data-i18n="localOnly">Local</option><option value="uploading" data-i18n="uploading">Uploading</option><option value="archived" data-i18n="archived">Archived</option><option value="failed" data-i18n="failed">Failed</option></select></div>
+          <div class="recording-summary"><span id="recording-count">0</span><span data-i18n="segments">segments</span></div>
+        </div>
+        <div class="recordings-layout">
+          <div id="recording-list" class="recording-list"></div>
+          <aside id="recording-player" class="card panel recording-player hidden">
+            <div class="player-heading"><div><span class="eyebrow" data-i18n="playback">PLAYBACK</span><h3 id="player-title">-</h3><p id="player-meta" class="muted">-</p></div><button id="close-player" class="button-ghost button-icon-only" aria-label="Close player">x</button></div>
+            <video id="recording-video" controls playsinline preload="metadata"></video>
+            <div class="player-note" data-i18n="playbackNote">Playback uses a short-lived ticket and supports seeking with HTTP Range. Live RTSP remains on the Cameras page.</div>
+          </aside>
+        </div>
+      </section>
     </div>
   </main>
   <div id="toast" class="toast"></div>

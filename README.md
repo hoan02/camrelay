@@ -26,6 +26,7 @@ flowchart LR
 - `src/dh.rs` implements the Dahua HTTP-like P2P signaling and handshake.
 - `src/ptcp.rs` implements PTCP packet/session handling and multiplexed realms.
 - `src/process.rs` bridges local TCP client data to PTCP and back.
+- `src/recordings.rs` manages FFmpeg segment processes, recording metadata, rclone archiving, and playback source selection.
 - `static/index.html`, `static/app.js`, and `static/app.css` provide the routed web manager.
 - `dh-p2p.lua` is an optional Wireshark dissector for protocol investigation.
 
@@ -56,6 +57,9 @@ flowchart LR
 - Guaranteed reconnection after every network or device failure.
 - A native Frigate integration.
 - Provider probe success does not guarantee camera, firmware, model, region, or RTSP compatibility.
+- Optional FFmpeg segment recording with a JSON recording index.
+- Optional Google Drive archiving through a local rclone remote.
+- Ticket-protected browser playback with HTTP Range seeking for local files or archived files.
 
 ## Build and run
 
@@ -90,6 +94,7 @@ The web manager has these browser routes:
 | `/login` | Authentication screen. |
 | `/dashboard` | Camera and tunnel overview. |
 | `/cameras` | Camera setup and local RTSP endpoints. |
+| `/recordings` | Closed-segment browser playback and archive status. |
 | `/providers` | Platform provider profiles and provider probe. |
 | `/tokens` | API token management. |
 | `/settings` | Language and dark/light theme. |
@@ -184,6 +189,45 @@ The local port is the configured `local_port`; the RTSP path and channel can var
 
 For Frigate or another NVR, point the input at the same local RTSP URL. Ensure the relay host can reach the local port and that the service remains running.
 
+## Recording, playback, and Google Drive archive
+
+Recording is an optional operational layer around the relay:
+
+    camera P2P -> camrelay local RTSP -> FFmpeg segments -> recordings.json
+                                                 |
+                                                 +-> rclone -> Google Drive
+
+camrelay does not make Google Drive a live-stream origin. Live RTSP is still intended for Frigate, go2rtc, FFmpeg, or another local media consumer. The Recordings page is for closed segments and supports browser playback from local storage or the configured archive.
+
+Enable recording in config.json:
+
+    {
+      "recordings_enabled": true,
+      "recordings_dir": "recordings",
+      "recordings_index": "recordings.json",
+      "segment_seconds": 300,
+      "ffmpeg_path": "ffmpeg",
+      "archive_enabled": true,
+      "archive_remote": "gdrive:camrelay-archive",
+      "archive_root": "camrelay-archive",
+      "archive_poll_seconds": 15,
+      "local_retention_days": 0
+    }
+
+Install FFmpeg and make sure ffmpeg is on PATH, or set an absolute ffmpeg_path. The recorder starts only while the camera tunnel is running. It writes one MP4 segment per camera and indexes a segment after it has been closed.
+
+For Google Drive, configure an rclone remote locally:
+
+    rclone config
+    rclone lsd gdrive:
+    rclone mkdir gdrive:camrelay-archive
+
+Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically.
+
+The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
+
+For a first test, leave archive_enabled false, enable recording, start one camera, wait for one segment to close, and open /recordings. Then configure rclone and archive the same segment.
+
 ## Multi-camera example
 
 Each camera uses its own local port:
@@ -245,6 +289,11 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 | GET | `/api/tunnels` | Read tunnel status and RTSP URLs. |
 | GET/POST | `/api/tokens` | List or issue API tokens. |
 | PUT/DELETE | `/api/tokens/:id` | Update or revoke an API token. |
+| GET | `/api/recordings` | List indexed recording segments with optional camera/status filters. |
+| GET | `/api/recordings/config` | Read safe recording/archive capability settings. |
+| POST | `/api/recordings/:id/playback-ticket` | Issue a short-lived ticket for one recording. |
+| GET | `/api/playback/:id?ticket=...` | Stream local or archived MP4 with Range support. |
+| POST | `/api/recordings/:id/archive` | Upload one segment through the configured rclone remote. |
 
 ## Security notes
 
@@ -263,6 +312,7 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 - Relay mode exists in the handshake code but is not exposed as a per-camera setting.
 - The web server has no built-in TLS.
 - Runtime JSON is plaintext and writes are not transactional.
+- Recording files are local plaintext media; local_retention_days defaults to 0 (never delete automatically).
 - Provider probe state is kept in the current browser session and must be repeated after a reload or service restart.
 - Error handling and reconnect behavior still need hardening for unattended NVR use.
 
@@ -274,6 +324,7 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 4. Validate supported device families with authorized test hardware and document results by model/firmware.
 5. Add safer secret handling and optional encrypted or external configuration.
 6. Add deployment examples for Frigate, systemd, containers, and reverse proxies.
+7. Add transactional recording metadata storage, upload checksums, resumable Drive API support, thumbnails, event markers, and retention cleanup after more field testing.
 
 ## Protocol and investigation notes
 

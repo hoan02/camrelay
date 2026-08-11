@@ -19,6 +19,7 @@ pub enum TunnelStatus {
 type StatusMap = Arc<Mutex<HashMap<String, TunnelStatus>>>;
 type HandleMap = Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>;
 
+#[derive(Clone)]
 pub struct TunnelManager {
     statuses: StatusMap,
     handles: HandleMap,
@@ -33,7 +34,12 @@ impl TunnelManager {
     }
 
     pub fn status(&self, id: &str) -> TunnelStatus {
-        self.statuses.lock().unwrap().get(id).cloned().unwrap_or(TunnelStatus::Stopped)
+        self.statuses
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or(TunnelStatus::Stopped)
     }
 
     pub fn start(&self, camera: Camera) -> Result<(), String> {
@@ -50,16 +56,32 @@ impl TunnelManager {
         let handles = self.handles.clone();
         let id_clone = id.clone();
 
-        statuses.lock().unwrap().insert(id.clone(), TunnelStatus::Starting);
+        statuses
+            .lock()
+            .unwrap()
+            .insert(id.clone(), TunnelStatus::Starting);
 
         let task = tokio::spawn(async move {
             let s = statuses.clone();
             let inner = tokio::spawn(run_tunnel(camera, s.clone()));
 
             match inner.await {
-                Ok(Ok(_)) => { s.lock().unwrap().insert(id_clone.clone(), TunnelStatus::Stopped); }
-                Ok(Err(e)) => { s.lock().unwrap().insert(id_clone.clone(), TunnelStatus::Error(e)); }
-                Err(e) => { s.lock().unwrap().insert(id_clone.clone(), TunnelStatus::Error(format!("Panic: {}", e))); }
+                Ok(Ok(_)) => {
+                    s.lock()
+                        .unwrap()
+                        .insert(id_clone.clone(), TunnelStatus::Stopped);
+                }
+                Ok(Err(e)) => {
+                    s.lock()
+                        .unwrap()
+                        .insert(id_clone.clone(), TunnelStatus::Error(e));
+                }
+                Err(e) => {
+                    s.lock().unwrap().insert(
+                        id_clone.clone(),
+                        TunnelStatus::Error(format!("Panic: {}", e)),
+                    );
+                }
             }
 
             handles.lock().unwrap().remove(&id_clone);
@@ -73,23 +95,33 @@ impl TunnelManager {
         if let Some(handle) = self.handles.lock().unwrap().remove(id) {
             handle.abort();
         }
-        self.statuses.lock().unwrap().insert(id.to_string(), TunnelStatus::Stopped);
+        self.statuses
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), TunnelStatus::Stopped);
     }
 }
 
 async fn run_tunnel(camera: Camera, statuses: StatusMap) -> Result<(), String> {
     // Look up brand to get server/credentials
     let brands = load_brands();
-    let brand = brands.into_iter().find(|b| b.name == camera.brand)
+    let brand = brands
+        .into_iter()
+        .find(|b| b.name == camera.brand)
         .ok_or_else(|| format!("Brand '{}' not found in brands.json", camera.brand))?;
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", camera.local_port))
         .await
         .map_err(|e| format!("Port {} busy: {}", camera.local_port, e))?;
 
-    let socket = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| e.to_string())?;
 
-    println!("[{}] Connecting via {} ({})...", camera.name, brand.name, brand.main_server);
+    println!(
+        "[{}] Connecting via {} ({})...",
+        camera.name, brand.name, brand.main_server
+    );
     let (socket, session) = p2p_handshake(
         socket,
         camera.serial.clone(),
@@ -97,17 +129,23 @@ async fn run_tunnel(camera: Camera, statuses: StatusMap) -> Result<(), String> {
         &brand.main_server,
         &brand.app_username,
         &brand.app_userkey,
-    ).await;
+    )
+    .await;
 
     let (dh_tx, dh_rx) = mpsc::channel::<PTCPEvent>(128);
     let session = Arc::new(Mutex::new(session));
     let channels = Arc::new(Mutex::new(HashMap::<u32, mpsc::Sender<Vec<u8>>>::new()));
     let conn_channels = Arc::new(Mutex::new(HashMap::<u32, oneshot::Sender<bool>>::new()));
 
-    statuses.lock().unwrap().insert(camera.id.clone(), TunnelStatus::Running);
+    statuses
+        .lock()
+        .unwrap()
+        .insert(camera.id.clone(), TunnelStatus::Running);
 
-    println!("[{}] Ready — rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-        camera.name, camera.username, camera.password, camera.local_port);
+    println!(
+        "[{}] Ready — rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
+        camera.name, camera.username, camera.password, camera.local_port
+    );
 
     let reader = Arc::new(socket);
     let writer = reader.clone();
@@ -120,12 +158,18 @@ async fn run_tunnel(camera: Camera, statuses: StatusMap) -> Result<(), String> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            if hb_tx.send(PTCPEvent::Heartbeat).await.is_err() { break; }
+            if hb_tx.send(PTCPEvent::Heartbeat).await.is_err() {
+                break;
+            }
         }
     });
 
-    tokio::spawn(async move { dh_writer(session, writer, dh_rx, remote_port).await; });
-    tokio::spawn(async move { dh_reader(session2, reader, channels, conn_channels).await; });
+    tokio::spawn(async move {
+        dh_writer(session, writer, dh_rx, remote_port).await;
+    });
+    tokio::spawn(async move {
+        dh_reader(session2, reader, channels, conn_channels).await;
+    });
 
     loop {
         let (client, addr) = listener.accept().await.map_err(|e| e.to_string())?;
@@ -139,11 +183,18 @@ async fn run_tunnel(camera: Camera, statuses: StatusMap) -> Result<(), String> {
         channels2.lock().unwrap().insert(realm_id, tx);
         conn_channels2.lock().unwrap().insert(realm_id, conn_tx);
 
-        dh_tx.send(PTCPEvent::Connect(realm_id)).await.map_err(|e| e.to_string())?;
+        dh_tx
+            .send(PTCPEvent::Connect(realm_id))
+            .await
+            .map_err(|e| e.to_string())?;
         conn_rx.await.map_err(|e| e.to_string())?;
 
         let (r, w) = client.into_split();
-        tokio::spawn(async move { process_reader(r, realm_id, dh_tx_clone).await; });
-        tokio::spawn(async move { process_writer(w, rx).await; });
+        tokio::spawn(async move {
+            process_reader(r, realm_id, dh_tx_clone).await;
+        });
+        tokio::spawn(async move {
+            process_writer(w, rx).await;
+        });
     }
 }
