@@ -1129,6 +1129,7 @@ async fn get_v1_recordings(
                     bytes: recording.bytes,
                     status: recording.status,
                     archive_available,
+                    checksum_sha256: recording.checksum_sha256,
                 }
             })
             .collect::<Vec<_>>(),
@@ -1194,6 +1195,7 @@ fn recording_summary(recording: Recording) -> RecordingSummary {
         bytes: recording.bytes,
         status: recording.status,
         archive_available,
+        checksum_sha256: recording.checksum_sha256,
     }
 }
 

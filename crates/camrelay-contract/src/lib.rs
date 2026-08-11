@@ -72,6 +72,7 @@ pub struct RecordingSummary {
     pub bytes: u64,
     pub status: String,
     pub archive_available: bool,
+    pub checksum_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

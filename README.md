@@ -376,7 +376,7 @@ Next, in order:
 
 1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
 2. Add a WebRTC media gateway (MediaMTX, go2rtc, or an in-process alternative) behind the existing credential-free local proxy; HLS is already available for web/mobile and Frigate/FFmpeg integrations.
-3. Add recording retention, upload checksums/resume, thumbnails, and event markers.
+3. Add retention policy, remote checksum/resume verification, thumbnails, and event markers; local recording SHA-256 metadata is now indexed.
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
 5. Validate ticket-backed playback on an authorized Android device and complete the iOS runner/device build on macOS; then add a WebRTC adapter when the gateway contract is finalized.
 

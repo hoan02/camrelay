@@ -304,6 +304,12 @@ paths:
       responses:
         '200':
           description: Recording summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecordingSummary'
   /api/v1/recordings/{recording_id}:
     parameters:
       - name: recording_id
@@ -315,6 +321,10 @@ paths:
       responses:
         '200':
           description: Recording detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingSummary'
   /api/v1/recordings/{recording_id}/playback-ticket:
     post:
       summary: Issue a short-lived playback ticket
@@ -326,6 +336,10 @@ paths:
       responses:
         '200':
           description: Playback URL and expiry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackTicket'
   /api/v1/recordings/{recording_id}/archive:
     post:
       summary: Queue or perform archive upload
@@ -337,6 +351,10 @@ paths:
       responses:
         '200':
           description: Updated recording status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingSummary'
   /api/v1/events:
     get:
       summary: List normalized activity events
@@ -518,6 +536,26 @@ components:
         protocol: { type: string, enum: [hls] }
         url: { type: string }
         expires_in_seconds: { type: integer, minimum: 1 }
+    PlaybackTicket:
+      type: object
+      required: [url, expires_in_seconds]
+      properties:
+        url: { type: string }
+        expires_in_seconds: { type: integer, minimum: 1 }
+    RecordingSummary:
+      type: object
+      required: [id, camera_id, camera_name, started_at, ended_at, kind, bytes, status, archive_available, checksum_sha256]
+      properties:
+        id: { type: string }
+        camera_id: { type: string }
+        camera_name: { type: string }
+        started_at: { type: string }
+        ended_at: { type: string, nullable: true }
+        kind: { type: string }
+        bytes: { type: integer, format: int64, minimum: 0 }
+        status: { type: string }
+        archive_available: { type: boolean }
+        checksum_sha256: { type: string, nullable: true, pattern: '^[a-f0-9]{64}$' }
     ProviderInput:
       allOf:
         - $ref: '#/components/schemas/ProviderPatch'

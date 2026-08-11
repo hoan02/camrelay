@@ -35,6 +35,7 @@ export type Recording = {
   bytes: number;
   status: string;
   archive_available: boolean;
+  checksum_sha256: string | null;
 };
 
 export type PlaybackTicket = { url: string; expires_in_seconds: number };

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Read,
     path::Path,
     sync::{Arc, Mutex},
     time::{Duration as StdDuration, SystemTime},
@@ -8,6 +9,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{
     process::{Child, Command},
     time::Duration,
@@ -34,6 +36,8 @@ pub struct Recording {
     pub bytes: u64,
     pub status: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub checksum_sha256: Option<String>,
 }
 
 #[derive(Clone)]
@@ -103,6 +107,7 @@ impl RecordingManager {
         self.reap_finished();
         self.stop_inactive(cameras, tunnels);
         self.index_closed_files(cameras);
+        self.backfill_missing_checksums();
 
         if self.config.recordings_enabled {
             for camera in cameras
@@ -119,11 +124,16 @@ impl RecordingManager {
     }
 
     pub async fn archive(&self, id: &str) -> Result<Recording, String> {
-        let record = self
+        let mut record = self
             .get(id)
             .ok_or_else(|| "Recording not found".to_string())?;
         if record.status == "archived" {
             return Ok(record);
+        }
+        if record.checksum_sha256.is_none() {
+            let checksum = sha256_file(Path::new(&record.local_path))?;
+            self.set_checksum(&record.id, checksum.clone());
+            record.checksum_sha256 = Some(checksum);
         }
         self.set_status(id, "uploading", None);
         self.upload(record).await?;
@@ -160,6 +170,25 @@ impl RecordingManager {
             record.error = error;
         }
         self.persist();
+    }
+
+    fn set_checksum(&self, id: &str, checksum: String) {
+        let mut changed = false;
+        if let Some(record) = self
+            .records
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|record| record.id == id)
+        {
+            if record.checksum_sha256.as_deref() != Some(checksum.as_str()) {
+                record.checksum_sha256 = Some(checksum);
+                changed = true;
+            }
+        }
+        if changed {
+            self.persist();
+        }
     }
 
     fn reap_finished(&self) {
@@ -330,11 +359,45 @@ impl RecordingManager {
                     bytes: metadata.len(),
                     status: "local".to_string(),
                     error: None,
+                    checksum_sha256: sha256_file(&path).ok(),
                 });
                 changed = true;
             }
         }
         drop(records);
+        if changed {
+            self.persist();
+        }
+    }
+
+    fn backfill_missing_checksums(&self) {
+        let candidates = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| record.checksum_sha256.is_none())
+            .filter(|record| Path::new(&record.local_path).is_file())
+            .map(|record| (record.id.clone(), record.local_path.clone()))
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for (id, path) in candidates {
+            let Ok(checksum) = sha256_file(Path::new(&path)) else {
+                continue;
+            };
+            if let Some(record) = self
+                .records
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|record| record.id == id)
+            {
+                if record.checksum_sha256.is_none() {
+                    record.checksum_sha256 = Some(checksum);
+                    changed = true;
+                }
+            }
+        }
         if changed {
             self.persist();
         }
@@ -409,4 +472,37 @@ impl RecordingManager {
 
 pub fn archive_poll_interval(config: &AppConfig) -> Duration {
     Duration::from_secs(config.archive_poll_seconds.max(5))
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|error| format!("Could not open file: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not read file: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_file_matches_empty_file_vector() {
+        let path = std::env::temp_dir().join(format!("camrelay-sha256-{}.tmp", Uuid::new_v4()));
+        fs::write(&path, []).expect("temporary file should be writable");
+        let checksum = sha256_file(&path).expect("checksum should be calculated");
+        let _ = fs::remove_file(&path);
+        assert_eq!(
+            checksum,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
 }

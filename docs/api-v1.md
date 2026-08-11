@@ -70,6 +70,11 @@ recording segment is represented with its camera, timestamp, status message, and
 source. It is not a motion-detection feed until an authorized camera event
 source is integrated.
 
+Recording summaries include an optional `checksum_sha256` calculated from the
+local MP4 bytes. Existing indexes are backfilled when a local file is next
+seen; remote-provider verification and resumable upload policy remain separate
+archive work.
+
 ## Roles
 
 | Role | Scope |
