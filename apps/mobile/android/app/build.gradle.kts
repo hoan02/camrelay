@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // Stable application identity for the Camrelay Android client.
         applicationId = "com.camrelay.camrelay"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -27,8 +27,9 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Distribution signing is intentionally not committed. Configure a
+            // private release keystore before publishing; debug signing keeps
+            // local release-mode smoke tests reproducible.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
