@@ -4,7 +4,7 @@ use axum::{
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ use crate::config::{
     AppConfig, Brand, Camera,
 };
 use crate::dh::probe_provider;
-use crate::recordings::RecordingManager;
+use crate::recordings::{Recording, RecordingManager};
 use crate::tunnel::{TunnelManager, TunnelStatus};
 
 #[derive(Clone)]
@@ -68,10 +68,13 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
         return unauthorized_response();
     };
 
+    let playback_ticket_request =
+        req.method() == Method::POST && req.uri().path().ends_with("/playback-ticket");
     if !matches!(
         req.method(),
         &Method::GET | &Method::HEAD | &Method::OPTIONS
     ) && !is_admin_role(&principal.role)
+        && !playback_ticket_request
     {
         return (
             StatusCode::FORBIDDEN,
@@ -657,19 +660,61 @@ async fn get_v1_recordings(
                 query.limit.unwrap_or(100),
             )
             .into_iter()
-            .map(|recording| RecordingSummary {
-                id: recording.id,
-                camera_id: recording.camera_id,
-                camera_name: recording.camera_name,
-                started_at: recording.started_at,
-                ended_at: recording.ended_at,
-                kind: recording.kind,
-                bytes: recording.bytes,
-                status: recording.status,
-                archive_available: recording.archive_path.is_some(),
+            .map(|recording| {
+                let archive_available = recording.status == "archived";
+                RecordingSummary {
+                    id: recording.id,
+                    camera_id: recording.camera_id,
+                    camera_name: recording.camera_name,
+                    started_at: recording.started_at,
+                    ended_at: recording.ended_at,
+                    kind: recording.kind,
+                    bytes: recording.bytes,
+                    status: recording.status,
+                    archive_available,
+                }
             })
             .collect::<Vec<_>>(),
     )
+}
+
+fn recording_summary(recording: Recording) -> RecordingSummary {
+    let archive_available = recording.status == "archived";
+    RecordingSummary {
+        id: recording.id,
+        camera_id: recording.camera_id,
+        camera_name: recording.camera_name,
+        started_at: recording.started_at,
+        ended_at: recording.ended_at,
+        kind: recording.kind,
+        bytes: recording.bytes,
+        status: recording.status,
+        archive_available,
+    }
+}
+
+async fn get_v1_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.recording_manager.get(&id) {
+        Some(recording) => Json(recording_summary(recording)).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn archive_v1_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.recording_manager.archive(&id).await {
+        Ok(recording) => Json(recording_summary(recording)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"code": "recording.archive_failed", "message": error})),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_v1_tokens(State(state): State<AppState>) -> impl IntoResponse {
@@ -764,6 +809,124 @@ async fn create_v1_token(
         })),
     )
         .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct TokenPatchPayload {
+    name: Option<String>,
+    expires_at: Option<String>,
+    enabled: Option<bool>,
+}
+
+async fn update_v1_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TokenPatchPayload>,
+) -> impl IntoResponse {
+    let current = match &state.storage {
+        Some(storage) => match storage.list_api_tokens().await {
+            Ok(tokens) => tokens
+                .into_iter()
+                .find(|token| token.id == id)
+                .map(|token| ApiToken {
+                    id: token.id,
+                    name: token.name,
+                    token: token.token,
+                    expires_at: token.expires_at,
+                    enabled: token.enabled,
+                }),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"code": "token.load_failed", "message": error.to_string()})),
+                )
+                    .into_response();
+            }
+        },
+        None => load_tokens().into_iter().find(|token| token.id == id),
+    };
+    let Some(mut token) = current else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if let Some(name) = body.name {
+        token.name = name;
+    }
+    if let Some(expires_at) = body.expires_at {
+        token.expires_at = Some(expires_at);
+    }
+    if let Some(enabled) = body.enabled {
+        token.enabled = enabled;
+    }
+    if token.name.trim().is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"code": "token.invalid_input", "message": "Token name is required."})),
+        )
+            .into_response();
+    }
+    let result = if let Some(storage) = &state.storage {
+        storage
+            .upsert_api_token(&camrelay_storage::LegacyToken {
+                id: token.id.clone(),
+                name: token.name.clone(),
+                token: token.token.clone(),
+                expires_at: token.expires_at.clone(),
+                enabled: token.enabled,
+            })
+            .await
+            .map_err(|error| error.to_string())
+    } else {
+        let mut tokens = load_tokens();
+        if let Some(existing) = tokens.iter_mut().find(|existing| existing.id == id) {
+            *existing = token.clone();
+            save_tokens(&tokens).map_err(|error| error.to_string())
+        } else {
+            Err("Token not found".to_string())
+        }
+    };
+    if let Err(error) = result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "token.save_failed", "message": error})),
+        )
+            .into_response();
+    }
+    Json(ApiTokenSummary {
+        id: token.id,
+        name: token.name,
+        expires_at: token.expires_at,
+        enabled: token.enabled,
+    })
+    .into_response()
+}
+
+async fn delete_v1_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let result = if let Some(storage) = &state.storage {
+        storage.delete_api_token(&id).await
+    } else {
+        let mut tokens = load_tokens();
+        let before = tokens.len();
+        tokens.retain(|token| token.id != id);
+        if tokens.len() == before {
+            Ok(false)
+        } else {
+            save_tokens(&tokens)
+                .map(|_| true)
+                .map_err(camrelay_storage::StorageError::from)
+        }
+    };
+    match result {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "token.delete_failed", "message": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_v1_providers(State(state): State<AppState>) -> impl IntoResponse {
@@ -1763,7 +1926,17 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(delete_v1_provider),
         )
         .route("/recordings", get(get_v1_recordings))
+        .route("/recordings/:id", get(get_v1_recording))
+        .route(
+            "/recordings/:id/playback-ticket",
+            post(issue_playback_ticket),
+        )
+        .route("/recordings/:id/archive", post(archive_v1_recording))
         .route("/tokens", get(get_v1_tokens).post(create_v1_token))
+        .route(
+            "/tokens/:id",
+            patch(update_v1_token).delete(delete_v1_token),
+        )
         .route("/tunnels", get(get_v1_tunnels))
         .route("/cameras/:id/start", post(start_tunnel))
         .route("/cameras/:id/stop", post(stop_tunnel))

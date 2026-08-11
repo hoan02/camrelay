@@ -37,6 +37,8 @@ export type Recording = {
   archive_available: boolean;
 };
 
+export type PlaybackTicket = { url: string; expires_in_seconds: number };
+
 export type Provider = {
   id: string;
   name: string;
@@ -51,6 +53,7 @@ export type ProviderInput = {
 };
 
 export type Tunnel = { id: string; status: string };
+export type ApiToken = { id: string; name: string; expires_at: string | null; enabled: boolean };
 
 export type CurrentUser = {
   username: string;
@@ -105,6 +108,8 @@ export const api = {
   deleteCamera: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: "DELETE" }),
   health: () => request<Health>("/api/v1/health"),
   recordings: () => request<Recording[]>("/api/v1/recordings"),
+  playbackTicket: (id: string) => request<PlaybackTicket>(`/api/v1/recordings/${id}/playback-ticket`, { method: "POST" }),
+  archiveRecording: (id: string) => request<Recording>(`/api/v1/recordings/${id}/archive`, { method: "POST" }),
   providers: () => request<Provider[]>("/api/v1/providers"),
   createProvider: (input: ProviderInput) => request<Provider>("/api/v1/providers", { method: "POST", body: JSON.stringify(input) }),
   updateProvider: (id: string, input: Partial<ProviderInput>) => request<Provider>(`/api/v1/providers/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
@@ -112,4 +117,8 @@ export const api = {
   tunnels: () => request<Tunnel[]>("/api/v1/tunnels"),
   startCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/start`, { method: "POST" }),
   stopCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/stop`, { method: "POST" }),
+  tokens: () => request<ApiToken[]>("/api/v1/tokens"),
+  createToken: (input: { name: string; expires_at: string | null; enabled: boolean }) => request<ApiToken & { token: string }>("/api/v1/tokens", { method: "POST", body: JSON.stringify(input) }),
+  updateToken: (id: string, input: Partial<Pick<ApiToken, "name" | "expires_at" | "enabled">>) => request<ApiToken>(`/api/v1/tokens/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteToken: (id: string) => request<void>(`/api/v1/tokens/${id}`, { method: "DELETE" }),
 };

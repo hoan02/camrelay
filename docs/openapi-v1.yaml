@@ -201,6 +201,39 @@ paths:
       responses:
         '200':
           description: Recording summaries
+  /api/v1/recordings/{recording_id}:
+    parameters:
+      - name: recording_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get a secret-free recording detail
+      responses:
+        '200':
+          description: Recording detail
+  /api/v1/recordings/{recording_id}/playback-ticket:
+    post:
+      summary: Issue a short-lived playback ticket
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Playback URL and expiry
+  /api/v1/recordings/{recording_id}/archive:
+    post:
+      summary: Queue or perform archive upload
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated recording status
   /api/v1/tunnels:
     get:
       summary: List secret-free tunnel lifecycle status
@@ -219,6 +252,22 @@ paths:
       responses:
         '201':
           description: Token created
+  /api/v1/tokens/{token_id}:
+    parameters:
+      - name: token_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      summary: Update token metadata or enabled state
+      responses:
+        '200':
+          description: Updated token summary
+    delete:
+      summary: Revoke an API token
+      responses:
+        '204':
+          description: Token revoked
 components:
   securitySchemes:
     sessionCookie:

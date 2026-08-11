@@ -32,9 +32,14 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/providers               authenticated, secret-free summaries
     POST   /api/v1/providers               authenticated provider onboarding
     GET    /api/v1/recordings              authenticated, secret-free summaries
+    GET    /api/v1/recordings/{recording_id} authenticated, secret-free detail
+    POST   /api/v1/recordings/{recording_id}/playback-ticket
+    POST   /api/v1/recordings/{recording_id}/archive
     GET    /api/v1/tunnels                 authenticated, secret-free lifecycle status
     GET    /api/v1/tokens                  authenticated, secret-free summaries
     POST   /api/v1/tokens                  authenticated token creation; secret returned once
+    PATCH  /api/v1/tokens/{token_id}       authenticated token metadata update
+    DELETE /api/v1/tokens/{token_id}       authenticated token revocation
     POST   /api/v1/cameras/{camera_id}/start
     POST   /api/v1/cameras/{camera_id}/stop
     GET    /api/v1/cameras/{camera_id}
@@ -54,9 +59,6 @@ storage and authorization behavior is migrated from the legacy handlers:
     GET    /api/v1/cameras/{camera_id}/diagnostics
 
     POST   /api/v1/cameras/{camera_id}/live-ticket
-    POST   /api/v1/recordings/{recording_id}/playback-ticket
-    POST   /api/v1/recordings/{recording_id}/archive
-
     GET    /api/v1/events
     GET    /api/v1/system/health
     GET    /api/v1/system/stream

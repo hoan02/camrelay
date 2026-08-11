@@ -101,6 +101,23 @@ function ProtectedLayout() {
 }
 
 function Login() {
+  const { t } = useLocale();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError(""); setBusy(true);
+    try { await api.login(username, password); window.localStorage.setItem("camrelay_authenticated", "1"); navigate((location.state as { from?: string } | null)?.from ?? "/dashboard", { replace: true }); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : t("login.unreachable")); }
+    finally { setBusy(false); }
+  };
+  return <div className="login-page"><div className="login-orbit orbit-a" /><div className="login-orbit orbit-b" /><div className="login-panel"><div className="brand login-brand"><span className="brand-mark"><i /><i /><i /></span><span>camrelay</span></div><div className="login-intro"><span className="eyebrow">{t("login.eyebrow")}</span><h1>{t("login.title")}<br /><em>{t("login.titleAccent")}</em></h1><p>{t("login.description")}</p></div><form onSubmit={submit} className="login-form"><label>{t("login.username")}<input autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} placeholder={t("login.usernamePlaceholder")} required /></label><label>{t("login.password")}<input autoComplete="current-password" type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} required /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={busy}>{busy ? t("login.connecting") : t("login.submit")}<Icon name="arrow" size={17} /></button></form><small className="login-note">{t("login.note")}</small></div><div className="login-caption"><span>SELF-HOSTED / ENCRYPTED / YOURS</span><span>v1 foundation</span></div></div>;
+}
+
+function LegacyLogin() {
   const navigate = useNavigate();
   const location = useLocation();
   const [username, setUsername] = useState("");
@@ -149,6 +166,15 @@ function CameraDialog({ busy, error, onClose, onSubmit }: { busy: boolean; error
 
 function Recordings() {
   const { data: recordings, isLoading, isError } = useQuery({ queryKey: ["recordings"], queryFn: api.recordings });
+  const queryClient = useQueryClient();
+  const [playing, setPlaying] = useState<{ id: string; url: string } | null>(null);
+  const playback = useMutation({ mutationFn: api.playbackTicket, onSuccess: (ticket, id) => setPlaying({ id, url: ticket.url }) });
+  const archive = useMutation({ mutationFn: api.archiveRecording, onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["recordings"] }); } });
+  return <><PageHeading eyebrow="MEDIA LIBRARY" title="Recordings" description="Closed segments, local retention, and the path to your cloud archive." />{isLoading && <div className="panel loading-panel">Loading recording index...</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>Recording API is not connected</h2><p>The v1 recording surface is ready for local playback and archive controls.</p></div>}{playing && <section className="panel playback-panel"><div className="panel-heading"><div><span className="eyebrow">PLAYBACK TICKET</span><h2>Private preview</h2></div><button className="icon-button" onClick={() => setPlaying(null)} aria-label="Close playback">x</button></div><video className="recording-player" controls autoPlay src={playing.url} /></section>}{recordings && recordings.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>No closed segments</h2><p>Once recording is enabled and a segment closes, it will appear here with its retention and archive state.</p></div>}{recordings && recordings.length > 0 && <div className="panel recordings-list"><div className="recordings-header"><span>SEGMENT</span><span>CAMERA</span><span>STATUS</span><span>SIZE</span><span>ACTIONS</span></div>{recordings.map(recording => <div className="recording-row" key={recording.id}><div><b>{formatDate(recording.started_at)}</b><small>{recording.kind}{recording.ended_at ? ` - ${formatTime(recording.ended_at)}` : " - in progress"}</small></div><span>{recording.camera_name}</span><span className={`recording-status ${recording.status}`}>{recording.archive_available ? "Archived" : recording.status}</span><span>{formatBytes(recording.bytes)}</span><div className="recording-actions"><button className="text-button" onClick={() => playback.mutate(recording.id)} disabled={playback.isPending}>Play</button>{!recording.archive_available && <button className="text-button" onClick={() => archive.mutate(recording.id)} disabled={archive.isPending}>Archive</button>}</div></div>)}</div>}{(playback.error || archive.error) && <p className="form-error">{(playback.error instanceof ApiError ? playback.error.message : archive.error instanceof ApiError ? archive.error.message : "Recording action failed.")}</p>}</>;
+}
+
+function LegacyRecordings() {
+  const { data: recordings, isLoading, isError } = useQuery({ queryKey: ["recordings"], queryFn: api.recordings });
   return <><PageHeading eyebrow="MEDIA LIBRARY" title="Recordings" description="Closed segments, local retention, and the path to your cloud archive." />{isLoading && <div className="panel loading-panel">Loading recording index…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>Recording API is not connected</h2><p>The new media surface is wired to the v1 contract and will remain read-only until archive controls migrate.</p></div>}{recordings && recordings.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>No closed segments</h2><p>Once recording is enabled and a segment closes, it will appear here with its retention and archive state.</p></div>}{recordings && recordings.length > 0 && <div className="panel recordings-list"><div className="recordings-header"><span>SEGMENT</span><span>CAMERA</span><span>STATUS</span><span>SIZE</span></div>{recordings.map(recording => <div className="recording-row" key={recording.id}><div><b>{formatDate(recording.started_at)}</b><small>{recording.kind}{recording.ended_at ? ` · ${formatTime(recording.ended_at)}` : " · in progress"}</small></div><span>{recording.camera_name}</span><span className={`recording-status ${recording.status}`}>{recording.archive_available ? "Archived" : recording.status}</span><span>{formatBytes(recording.bytes)}</span></div>)}</div>}</>;
 }
 
@@ -176,7 +202,17 @@ function formatBytes(value: number) { if (!value) return "—"; if (value < 1024
 
 function CameraCard({ camera, status, busy, onToggle, onDelete }: { camera: Camera; status: string; busy: boolean; onToggle: () => void; onDelete: () => void }) { const running = status === "running"; return <article className="camera-card"><div className="camera-preview"><span className="preview-label">NO LIVE PREVIEW</span><span className="preview-grid" /><span className={`camera-live-badge ${running ? "is-running" : ""}`}><i />{status}</span></div><div className="camera-body"><div className="camera-title"><span className={`camera-status ${running ? "is-running" : ""}`} /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div><button className="icon-button subtle" title="Delete camera" onClick={onDelete} disabled={busy}>×</button></div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? "Auto-start" : "Manual start"}</span></div><div className="camera-actions"><button className="secondary-button compact" onClick={onToggle} disabled={busy}>{running ? "Stop relay" : "Start relay"}</button></div></div></article>; }
 
-function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
+  const { locale } = useLocale();
+  const localized = locale === "vi" ? ({
+    "OVERVIEW|Good to see you.": ["TỔNG QUAN", "Mừng bạn trở lại.", "Một nơi yên tĩnh để theo dõi relay, camera và kho lưu trữ của bạn."],
+    "DEVICE FLEET|Cameras": ["ĐỘI CAMERA", "Camera", "Quản lý thiết bị từ xa và các cổng relay cục bộ tương ứng."],
+    "P2P PROFILES|Providers": ["HỒ SƠ P2P", "Nhà cung cấp", "Hồ sơ signaling của relay. Secret ở lại trên máy chủ; khả năng tương thích cần được kiểm thử thực tế."],
+    "MEDIA LIBRARY|Recordings": ["THƯ VIỆN MEDIA", "Bản ghi", "Các phân đoạn đã đóng, thời hạn lưu cục bộ và lộ trình lên cloud."],
+  } as Record<string, [string, string, string]>)[`${eyebrow}|${title}`] : undefined;
+  const copy = localized ?? [eyebrow, title, description];
+  return <div className="page-heading"><div><span className="eyebrow">{copy[0]}</span><h1>{copy[1]}</h1><p>{copy[2]}</p></div>{action}</div>;
+}
 function Metric({ label, value, detail, icon, tone = "default" }: { label: string; value: string; detail: string; icon: IconName; tone?: string }) { return <div className={`metric-card ${tone}`}><div className="metric-icon"><Icon name={icon} size={17} /></div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>; }
 function Settings() {
   const { locale, setLocale, t } = useLocale();
