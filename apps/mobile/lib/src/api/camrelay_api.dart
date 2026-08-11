@@ -87,6 +87,9 @@ class CamrelayApi {
         .toList(growable: false);
   }
 
+  Future<RetentionPreview> retentionPreview() async => RetentionPreview.fromJson(
+      await _request('GET', '/api/v1/recordings/retention-preview'));
+
   Future<List<EventSummary>> events() async {
     final payload = await _request('GET', '/api/v1/events');
     return _list(payload).map(EventSummary.fromJson).toList(growable: false);

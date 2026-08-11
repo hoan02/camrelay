@@ -157,6 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late Future<List<CameraSummary>> _cameras;
   late Future<List<TunnelSummary>> _tunnels;
   late Future<List<RecordingSummary>> _recordings;
+  late Future<RetentionPreview> _retention;
   late Future<List<EventSummary>> _events;
 
   @override
@@ -170,6 +171,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _cameras = widget.api.cameras();
     _tunnels = widget.api.tunnels();
     _recordings = widget.api.recordings();
+    _retention = widget.api.retentionPreview();
     _events = widget.api.events();
   }
 
@@ -353,6 +355,39 @@ class _HomeScreenState extends State<HomeScreen> {
                                               _openRecording(recording))
                                     ])))
                             .toList());
+                  }),
+              const SizedBox(height: 24),
+              Text('Local retention',
+                  style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              FutureBuilder<RetentionPreview>(
+                  future: _retention,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return const _ErrorTile(
+                          message: 'Retention status is unavailable.');
+                    }
+                    if (!snapshot.hasData) {
+                      return const Center(
+                          child: Padding(
+                              padding: EdgeInsets.all(20),
+                              child: CircularProgressIndicator()));
+                    }
+                    final retention = snapshot.data!;
+                    return Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.storage_outlined),
+                        title: Text(retention.configuredDays == 0
+                            ? 'Automatic deletion disabled'
+                            : '${retention.eligibleCount} local candidate(s)'),
+                        subtitle: Text(retention.blockedUnarchivedCount == 0
+                            ? 'Read-only preview · cloud objects are never deleted here'
+                            : '${retention.blockedUnarchivedCount} waiting for archive'),
+                        trailing: retention.autoDeleteEnabled
+                            ? const Icon(Icons.warning_amber_outlined)
+                            : const Icon(Icons.lock_outline),
+                      ),
+                    );
                   }),
               const SizedBox(height: 24),
               Text('Recent activity',

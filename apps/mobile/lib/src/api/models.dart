@@ -99,6 +99,42 @@ class RecordingSummary {
       );
 }
 
+class RetentionPreview {
+  const RetentionPreview({
+    required this.configuredDays,
+    required this.autoDeleteEnabled,
+    required this.eligibleCount,
+    required this.eligibleBytes,
+    required this.blockedUnarchivedCount,
+    required this.oldestEligibleAt,
+    required this.eligibleRecordingIds,
+  });
+
+  final int configuredDays;
+  final bool autoDeleteEnabled;
+  final int eligibleCount;
+  final int eligibleBytes;
+  final int blockedUnarchivedCount;
+  final DateTime? oldestEligibleAt;
+  final List<String> eligibleRecordingIds;
+
+  factory RetentionPreview.fromJson(Map<String, dynamic> json) =>
+      RetentionPreview(
+        configuredDays: (json['configured_days'] as num?)?.toInt() ?? 0,
+        autoDeleteEnabled: json['auto_delete_enabled'] as bool? ?? false,
+        eligibleCount: (json['eligible_count'] as num?)?.toInt() ?? 0,
+        eligibleBytes: (json['eligible_bytes'] as num?)?.toInt() ?? 0,
+        blockedUnarchivedCount:
+            (json['blocked_unarchived_count'] as num?)?.toInt() ?? 0,
+        oldestEligibleAt:
+            DateTime.tryParse(json['oldest_eligible_at'] as String? ?? ''),
+        eligibleRecordingIds: (json['eligible_recording_ids'] as List?)
+                ?.whereType<String>()
+                .toList(growable: false) ??
+            const [],
+      );
+}
+
 class EventSummary {
   const EventSummary({
     required this.id,
