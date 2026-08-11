@@ -96,6 +96,16 @@ pub struct UserSummary {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AuditEventSummary {
+    pub id: String,
+    pub actor: String,
+    pub action: String,
+    pub path: String,
+    pub status: u16,
+    pub created_at: String,
+}
+
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
         Self { items, next_cursor }

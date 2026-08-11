@@ -299,6 +299,47 @@ impl Storage {
         Ok(true)
     }
 
+    pub async fn record_audit(
+        &self,
+        actor: &str,
+        action: &str,
+        path: &str,
+        status: u16,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            "INSERT INTO audit_events (id, actor, action, path, status) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(format!("audit-{}", rand::random::<u128>()))
+        .bind(actor)
+        .bind(action)
+        .bind(path)
+        .bind(i64::from(status))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_audit(&self, limit: usize) -> Result<Vec<StoredAuditEvent>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id, actor, action, path, status, created_at FROM audit_events ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(StoredAuditEvent {
+                    id: row.try_get("id")?,
+                    actor: row.try_get("actor")?,
+                    action: row.try_get("action")?,
+                    path: row.try_get("path")?,
+                    status: row.try_get::<i64, _>("status")? as u16,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
+    }
+
     pub async fn import_legacy(
         &self,
         snapshot: &LegacySnapshot,
@@ -679,6 +720,16 @@ pub struct StoredSession {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAuditEvent {
+    pub id: String,
+    pub actor: String,
+    pub action: String,
+    pub path: String,
+    pub status: u16,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredProvider {
     pub id: String,
     pub name: String,
@@ -875,6 +926,31 @@ mod tests {
             .await
             .expect("new lookup")
             .is_some());
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn audit_events_are_listed_without_request_secrets() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("camrelay-audit-{suffix}.sqlite"));
+        let storage = Storage::open_with_secret_key(&path, None)
+            .await
+            .expect("database should open");
+        storage
+            .record_audit("owner", "POST", "/api/v1/cameras", 201)
+            .await
+            .expect("audit event should persist");
+        let events = storage.list_audit(10).await.expect("audit should list");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].actor, "owner");
+        assert_eq!(events[0].action, "POST");
+        assert_eq!(events[0].path, "/api/v1/cameras");
+        assert_eq!(events[0].status, 201);
 
         drop(storage);
         let _ = std::fs::remove_file(path);

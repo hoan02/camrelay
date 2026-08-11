@@ -334,6 +334,25 @@ paths:
       responses:
         '200':
           description: Activity events
+  /api/v1/audit:
+    get:
+      summary: List privacy-safe mutation audit events
+      description: Owner/admin only. Request bodies, query strings, and secret values are never persisted.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEvent'
+        '403':
+          description: Owner or admin role required
   /api/v1/system/health:
     get:
       security: []
@@ -418,6 +437,16 @@ components:
       properties:
         username: { type: string }
         role: { type: string, enum: [owner, admin, operator, viewer] }
+        created_at: { type: string }
+    AuditEvent:
+      type: object
+      required: [id, actor, action, path, status, created_at]
+      properties:
+        id: { type: string }
+        actor: { type: string }
+        action: { type: string, enum: [POST, PUT, PATCH, DELETE] }
+        path: { type: string }
+        status: { type: integer, minimum: 100, maximum: 599 }
         created_at: { type: string }
     UserInput:
       type: object

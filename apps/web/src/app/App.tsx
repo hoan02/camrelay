@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, Camera, CameraDiagnostics, CameraInput, ProviderInput } from "../lib/api";
 import { Locale, translate } from "../lib/i18n";
 
-type IconName = "grid" | "camera" | "archive" | "settings" | "info" | "plus" | "arrow" | "sun" | "moon" | "logout" | "menu";
+type IconName = "grid" | "camera" | "archive" | "settings" | "info" | "plus" | "arrow" | "sun" | "moon" | "logout" | "menu" | "activity";
 
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, JSX.Element> = {
@@ -19,17 +19,19 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     moon: <path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.6 8.6 0 1 0 20.5 15.2Z" />,
     logout: <><path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9" /></>,
     menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
+    activity: <><path d="M3 12h4l2.2-6 4.1 12 2.2-6H21" /></>,
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-const navItems: Array<{ to: string; label: string; icon: IconName }> = [
+const navItems: Array<{ to: string; label: string; icon: IconName; adminOnly?: boolean }> = [
   { to: "/dashboard", label: "nav.dashboard", icon: "grid" },
   { to: "/cameras", label: "nav.cameras", icon: "camera" },
   { to: "/providers", label: "nav.providers", icon: "settings" },
   { to: "/recordings", label: "nav.recordings", icon: "archive" },
   { to: "/tokens", label: "nav.tokens", icon: "settings" },
-  { to: "/users", label: "nav.users", icon: "settings" },
+  { to: "/users", label: "nav.users", icon: "settings", adminOnly: true },
+  { to: "/audit", label: "nav.audit", icon: "activity", adminOnly: true },
 ];
 
 type Theme = "dark" | "light";
@@ -55,6 +57,7 @@ export function App() {
       <Route path="recordings" element={<Recordings />} />
       <Route path="tokens" element={<Tokens />} />
       <Route path="users" element={<Users />} />
+      <Route path="audit" element={<AuditPage />} />
       <Route path="settings" element={<Settings />} />
       <Route path="about" element={<AboutPage />} />
     </Route>
@@ -72,6 +75,7 @@ function ProtectedLayout() {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
   const hasAuthHint = Boolean(window.localStorage.getItem("camrelay_authenticated") || window.localStorage.getItem("camrelay_access_token"));
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: hasAuthHint, retry: false, staleTime: 60_000 });
+  const canViewAdmin = me.data?.role === "owner" || me.data?.role === "admin";
 
   useEffect(() => {
     if (!hasAuthHint) return;
@@ -105,7 +109,7 @@ function ProtectedLayout() {
       <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>camrelay</span></div>
       <div className="sidebar-kicker">{t("sidebar.kicker")}</div>
       <nav className="nav-list" aria-label="Primary navigation">
-        {navItems.map(item => <NavLink onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to={item.to} key={item.to}><Icon name={item.icon} /><span>{t(item.label)}</span></NavLink>)}
+        {navItems.filter(item => !item.adminOnly || canViewAdmin).map(item => <NavLink onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to={item.to} key={item.to}><Icon name={item.icon} /><span>{t(item.label)}</span></NavLink>)}
       </nav>
       <div className="sidebar-bottom">
         <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/settings"><Icon name="settings" /><span>{t("nav.settings")}</span></NavLink>
@@ -312,6 +316,18 @@ function Settings() {
   const { locale, setLocale, t } = useLocale();
   const { theme, setTheme } = useTheme();
   return <><PageHeading eyebrow={t("page.settings.eyebrow")} title={t("page.settings.title")} description={t("page.settings.description")} /><div className="settings-grid"><section className="panel setting-card"><div className="setting-heading"><span className="setting-icon"><Icon name="info" /></span><div><h2>{t("settings.language.title")}</h2><p>{t("settings.language.description")}</p></div></div><div className="choice-group"><button className={locale === "en" ? "choice active" : "choice"} onClick={() => setLocale("en")}>{t("settings.language.english")}</button><button className={locale === "vi" ? "choice active" : "choice"} onClick={() => setLocale("vi")}>{t("settings.language.vietnamese")}</button></div></section><section className="panel setting-card"><div className="setting-heading"><span className="setting-icon"><Icon name={theme === "dark" ? "moon" : "sun"} /></span><div><h2>{t("settings.theme.title")}</h2><p>{t("settings.theme.description")}</p></div></div><div className="choice-group"><button className={theme === "dark" ? "choice active" : "choice"} onClick={() => setTheme("dark")}>{t("settings.theme.dark")}</button><button className={theme === "light" ? "choice active" : "choice"} onClick={() => setTheme("light")}>{t("settings.theme.light")}</button></div></section><section className="panel setting-card security-setting"><div className="setting-heading"><span className="setting-icon"><Icon name="settings" /></span><div><h2>{t("settings.security.title")}</h2><p>{t("settings.security.description")}</p></div></div><span className="security-mark"><i /> HttpOnly session</span></section></div></>;
+}
+
+function AuditPage() {
+  const { t } = useLocale();
+  const { data: events, isLoading, isError } = useQuery({ queryKey: ["audit"], queryFn: api.audit, retry: false });
+  return <>
+    <PageHeading eyebrow={t("page.audit.eyebrow")} title={t("page.audit.title")} description={t("page.audit.description")} />
+    {isLoading && <div className="panel loading-panel">{t("audit.loading")}</div>}
+    {isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="activity" /></span><h2>{t("audit.unavailable")}</h2><p>{t("audit.unavailableDescription")}</p></div>}
+    {events && events.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="activity" /></span><h2>{t("audit.emptyTitle")}</h2><p>{t("audit.emptyDescription")}</p></div>}
+    {events && events.length > 0 && <section className="panel audit-list"><div className="audit-header"><span>{t("audit.time")}</span><span>{t("audit.actor")}</span><span>{t("audit.action")}</span><span>{t("audit.path")}</span><span>{t("audit.status")}</span></div>{events.map(event => <div className="audit-row" key={event.id}><time>{formatDate(event.created_at)}</time><strong>{event.actor}</strong><code>{event.action}</code><code className="audit-path">{event.path}</code><span className={`audit-status ${event.status < 400 ? "ok" : "error"}`}>{event.status}</span></div>)}</section>}
+  </>;
 }
 
 function AboutPage() {

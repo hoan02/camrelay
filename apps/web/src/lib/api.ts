@@ -77,6 +77,15 @@ export type EventSummary = {
   source: string;
 };
 
+export type AuditEvent = {
+  id: string;
+  actor: string;
+  action: string;
+  path: string;
+  status: number;
+  created_at: string;
+};
+
 export type CurrentUser = {
   username: string;
   role: string;
@@ -148,4 +157,5 @@ export const api = {
   deleteToken: (id: string) => request<void>(`/api/v1/tokens/${id}`, { method: "DELETE" }),
   users: () => request<UserSummary[]>("/api/v1/users"),
   createUser: (input: { username: string; password: string; role: string }) => request<UserSummary>("/api/v1/users", { method: "POST", body: JSON.stringify(input) }),
+  audit: () => request<AuditEvent[]>("/api/v1/audit"),
 };

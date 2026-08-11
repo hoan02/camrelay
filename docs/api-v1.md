@@ -52,6 +52,7 @@ Implemented in the current migration checkpoint:
     PATCH  /api/v1/providers/{provider_id}
     DELETE /api/v1/providers/{provider_id}
     GET    /api/v1/events
+    GET    /api/v1/audit                  authenticated owner/admin audit history
     GET    /api/v1/system/health
     GET    /api/v1/system/stream              authenticated Server-Sent Events telemetry
     POST   /api/v1/auth/login
@@ -91,3 +92,8 @@ legacy JSON otherwise. It returns only a secret-free summary. Camera startup,
 provider lookup, auto-start, recording reconciliation, token management, and
 the v1 management surface use the same SQLite source when that mode is enabled;
 legacy `/api` handlers remain only for rollback.
+
+Audit history records authenticated mutation method, path, response status,
+actor, and server timestamp. It intentionally excludes request bodies, query
+strings, camera credentials, provider secrets, and token values. Reading audit
+history requires an owner or admin role and SQLite mode.

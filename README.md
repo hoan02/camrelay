@@ -369,14 +369,14 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 Completed in the v1 foundation:
 
 - versioned API contract, SQLite persistence, encrypted device/provider secrets, auth sessions, RBAC, token management, readiness, and CRUD;
-- React console routes for dashboard, cameras, providers, recordings, tokens, settings, and technical notes;
-- local recording playback tickets, Range streaming, archive actions, backup/restore scripts, and Compose configuration.
+- React console routes for dashboard, cameras, providers, recordings, tokens, settings, audit history, and technical notes;
+- local recording playback tickets, Range streaming, archive actions, privacy-safe audit history, backup/restore scripts, and Compose configuration.
 
 Next, in order:
 
 1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
 2. Add real live-media delivery through a gateway such as MediaMTX or go2rtc, then connect Frigate/FFmpeg with documented examples.
-3. Add recording retention, upload checksums/resume, thumbnails, event markers, and audit history.
+3. Add recording retention, upload checksums/resume, thumbnails, and event markers.
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
 5. Add the Flutter mobile client against the same OpenAPI contract when the Flutter SDK/toolchain is available.
 

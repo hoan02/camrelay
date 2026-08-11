@@ -34,7 +34,7 @@ Mobile is a companion experience, not a compressed copy of administrative web fo
 | Foundation | **Complete for v1 management surface:** workspace boundary, SQLite, API v1, identity, RBAC, readiness and contract |
 | Media | **In progress:** durable local recording/archive and ticketed local HLS live view exist; WebRTC and device validation remain |
 | Console | **Management surface complete:** React onboarding, camera/provider/token/recording/settings/diagnostics routes and camera live action; full live wall/timeline remain |
-| Operations | **In progress:** archive, diagnostics, backup/restore exist; retention/audit history remain |
+| Operations | **In progress:** archive, diagnostics, backup/restore and privacy-safe audit history exist; retention remains |
 | Mobile | **Scaffolded:** Flutter client foundation follows the same API contract; SDK/build verification and live playback remain |
 
 ## UX principles

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Extension, Path, Query, Request, State},
+    extract::{Extension, OriginalUri, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{
@@ -29,7 +29,8 @@ use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 use camrelay_contract::{
-    ApiTokenSummary, CameraSummary, ProviderSummary, RecordingSummary, UserSummary, API_VERSION,
+    ApiTokenSummary, AuditEventSummary, CameraSummary, ProviderSummary, RecordingSummary,
+    UserSummary, API_VERSION,
 };
 use camrelay_storage::{LegacyCamera, Storage, StoredCameraConfig, StoredProviderConfig};
 
@@ -100,8 +101,27 @@ async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: 
             .into_response();
     }
 
-    req.extensions_mut().insert(principal);
-    next.run(req).await
+    req.extensions_mut().insert(principal.clone());
+    let method = req.method().clone();
+    let path = req
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.0.path().to_owned())
+        .unwrap_or_else(|| req.uri().path().to_owned());
+    let response = next.run(req).await;
+    if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        if let Some(storage) = &state.storage {
+            let _ = storage
+                .record_audit(
+                    &principal.username,
+                    method.as_str(),
+                    &path,
+                    response.status().as_u16(),
+                )
+                .await;
+        }
+    }
+    response
 }
 
 fn unauthorized_response() -> Response {
@@ -394,6 +414,58 @@ async fn get_v1_users(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({
                 "code": "users.load_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_v1_audit(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Query(query): Query<RecordingsQuery>,
+) -> Response {
+    if !is_admin_role(&principal.role) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "audit.admin_required",
+                "message": "Only an owner or admin can view audit history."
+            })),
+        )
+            .into_response();
+    }
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "audit.sqlite_required",
+                "message": "Audit history requires SQLite mode."
+            })),
+        )
+            .into_response();
+    };
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    match storage.list_audit(limit).await {
+        Ok(events) => Json(
+            events
+                .into_iter()
+                .map(|event| AuditEventSummary {
+                    id: event.id,
+                    actor: event.actor,
+                    action: event.action,
+                    path: event.path,
+                    status: event.status,
+                    created_at: event.created_at,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "audit.load_failed",
                 "message": error.to_string()
             })),
         )
@@ -2489,6 +2561,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/me", get(current_user));
     let v1_protected = Router::new()
         .route("/users", get(get_v1_users).post(create_v1_user))
+        .route("/audit", get(get_v1_audit))
         .route("/system/stream", get(system_stream))
         .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
         .route(
