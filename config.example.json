@@ -11,6 +11,7 @@
   "segment_seconds": 300,
   "ffmpeg_path": "ffmpeg",
   "archive_enabled": false,
+  "archive_verify": false,
   "archive_remote": "gdrive:camrelay-archive",
   "archive_root": "camrelay-archive",
   "archive_poll_seconds": 15,

@@ -78,6 +78,10 @@ archive work.
 
 `GET /api/v1/recordings/config` returns read-only media capability state. It
 does not return the rclone remote name, OAuth material, or archive credentials.
+When `archive_verify` is enabled, a completed upload is marked
+`archive_verified: true` only after rclone downloads and hashes the remote
+object with SHA-256; this is intentionally opt-in because it reads the full
+object again.
 `local_retention_days: 0` means no automatic deletion; retention cleanup remains
 an explicit future operations policy.
 

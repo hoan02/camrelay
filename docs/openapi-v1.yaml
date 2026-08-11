@@ -554,7 +554,7 @@ components:
         expires_in_seconds: { type: integer, minimum: 1 }
     RecordingSummary:
       type: object
-      required: [id, camera_id, camera_name, started_at, ended_at, kind, bytes, status, archive_available, checksum_sha256]
+      required: [id, camera_id, camera_name, started_at, ended_at, kind, bytes, status, archive_available, checksum_sha256, archive_verified]
       properties:
         id: { type: string }
         camera_id: { type: string }
@@ -566,13 +566,15 @@ components:
         status: { type: string }
         archive_available: { type: boolean }
         checksum_sha256: { type: string, nullable: true, pattern: '^[a-f0-9]{64}$' }
+        archive_verified: { type: boolean }
     RecordingConfig:
       type: object
-      required: [enabled, live_enabled, archive_enabled, archive_configured, segment_seconds, local_retention_days, ffmpeg_path, checksum_algorithm]
+      required: [enabled, live_enabled, archive_enabled, archive_verify, archive_configured, segment_seconds, local_retention_days, ffmpeg_path, checksum_algorithm]
       properties:
         enabled: { type: boolean }
         live_enabled: { type: boolean }
         archive_enabled: { type: boolean }
+        archive_verify: { type: boolean }
         archive_configured: { type: boolean }
         segment_seconds: { type: integer, minimum: 30 }
         local_retention_days: { type: integer, minimum: 0 }

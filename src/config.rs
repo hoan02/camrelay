@@ -53,6 +53,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub archive_enabled: bool,
     #[serde(default)]
+    pub archive_verify: bool,
+    #[serde(default)]
     pub archive_remote: String,
     #[serde(default = "default_archive_root")]
     pub archive_root: String,
@@ -81,6 +83,7 @@ impl Default for AppConfig {
             segment_seconds: default_segment_seconds(),
             ffmpeg_path: default_ffmpeg_path(),
             archive_enabled: false,
+            archive_verify: false,
             archive_remote: String::new(),
             archive_root: default_archive_root(),
             archive_poll_seconds: default_archive_poll_seconds(),

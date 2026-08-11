@@ -250,6 +250,7 @@ Enable recording in config.json:
       "segment_seconds": 300,
       "ffmpeg_path": "ffmpeg",
       "archive_enabled": true,
+      "archive_verify": false,
       "archive_remote": "gdrive:camrelay-archive",
       "archive_root": "camrelay-archive",
       "archive_poll_seconds": 15,
@@ -266,7 +267,7 @@ For Google Drive, configure an rclone remote locally:
     rclone lsd gdrive:
     rclone mkdir gdrive:camrelay-archive
 
-Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically.
+Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto with bounded retries; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically. Set archive_verify to true only when you want Camrelay to download each remote object again and compare its SHA-256 before marking it verified; this adds cloud bandwidth and latency.
 
 The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
 

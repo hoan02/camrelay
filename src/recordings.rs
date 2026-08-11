@@ -38,6 +38,8 @@ pub struct Recording {
     pub error: Option<String>,
     #[serde(default)]
     pub checksum_sha256: Option<String>,
+    #[serde(default)]
+    pub archive_verified: bool,
 }
 
 #[derive(Clone)]
@@ -127,8 +129,14 @@ impl RecordingManager {
         let mut record = self
             .get(id)
             .ok_or_else(|| "Recording not found".to_string())?;
-        if record.status == "archived" {
+        if record.status == "archived" && (!self.config.archive_verify || record.archive_verified) {
             return Ok(record);
+        }
+        if record.status == "archived" && self.config.archive_verify {
+            self.verify_archive(&record).await?;
+            return self
+                .get(id)
+                .ok_or_else(|| "Recording disappeared after verification".to_string());
         }
         if record.checksum_sha256.is_none() {
             let checksum = sha256_file_async(Path::new(&record.local_path)).await?;
@@ -183,6 +191,25 @@ impl RecordingManager {
         {
             if record.checksum_sha256.as_deref() != Some(checksum.as_str()) {
                 record.checksum_sha256 = Some(checksum);
+                changed = true;
+            }
+        }
+        if changed {
+            self.persist();
+        }
+    }
+
+    fn set_archive_verified(&self, id: &str, verified: bool) {
+        let mut changed = false;
+        if let Some(record) = self
+            .records
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|record| record.id == id)
+        {
+            if record.archive_verified != verified {
+                record.archive_verified = verified;
                 changed = true;
             }
         }
@@ -360,6 +387,7 @@ impl RecordingManager {
                     status: "local".to_string(),
                     error: None,
                     checksum_sha256: None,
+                    archive_verified: false,
                 });
                 changed = true;
             }
@@ -428,7 +456,7 @@ impl RecordingManager {
         }
     }
 
-    async fn upload(&self, record: Recording) -> Result<(), String> {
+    async fn upload(&self, mut record: Recording) -> Result<(), String> {
         let target = match self.archive_target(&record) {
             Some(target) => target,
             None => {
@@ -442,8 +470,29 @@ impl RecordingManager {
             self.set_status(&record.id, "failed", Some(error.clone()));
             return Err(error);
         }
+        if record.checksum_sha256.is_none() {
+            let checksum = match sha256_file_async(Path::new(&record.local_path)).await {
+                Ok(checksum) => checksum,
+                Err(error) => {
+                    self.set_status(&record.id, "failed", Some(error.clone()));
+                    return Err(error);
+                }
+            };
+            self.set_checksum(&record.id, checksum.clone());
+            record.checksum_sha256 = Some(checksum);
+        }
         let output = match Command::new("rclone")
-            .args(["copyto", &record.local_path, &target])
+            .args([
+                "copyto",
+                &record.local_path,
+                &target,
+                "--retries",
+                "3",
+                "--low-level-retries",
+                "10",
+                "--retries-sleep",
+                "5s",
+            ])
             .output()
             .await
         {
@@ -455,6 +504,16 @@ impl RecordingManager {
             }
         };
         if output.status.success() {
+            if self.config.archive_verify {
+                if let Err(error) = self.verify_remote_checksum(&record, &target).await {
+                    self.set_archive_verified(&record.id, false);
+                    self.set_status(&record.id, "failed", Some(error.clone()));
+                    return Err(error);
+                }
+                self.set_archive_verified(&record.id, true);
+            } else {
+                self.set_archive_verified(&record.id, false);
+            }
             self.set_status(&record.id, "archived", None);
             Ok(())
         } else {
@@ -467,6 +526,55 @@ impl RecordingManager {
             self.set_status(&record.id, "failed", Some(error.clone()));
             Err(error)
         }
+    }
+
+    async fn verify_archive(&self, record: &Recording) -> Result<(), String> {
+        let target = self
+            .archive_target(record)
+            .ok_or_else(|| "Archive remote is not configured".to_string())?;
+        if record.checksum_sha256.is_none() {
+            return Err("Local SHA-256 is unavailable for remote verification".to_string());
+        }
+        match self.verify_remote_checksum(record, &target).await {
+            Ok(()) => {
+                self.set_archive_verified(&record.id, true);
+                Ok(())
+            }
+            Err(error) => {
+                self.set_archive_verified(&record.id, false);
+                self.set_status(&record.id, "failed", Some(error.clone()));
+                Err(error)
+            }
+        }
+    }
+
+    async fn verify_remote_checksum(&self, record: &Recording, target: &str) -> Result<(), String> {
+        let expected = record
+            .checksum_sha256
+            .as_deref()
+            .ok_or_else(|| "Local SHA-256 is unavailable for remote verification".to_string())?;
+        let output = Command::new("rclone")
+            .args(["hashsum", "SHA-256", target, "--download"])
+            .output()
+            .await
+            .map_err(|error| format!("Could not start rclone verification: {error}"))?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(if message.is_empty() {
+                format!("rclone verification exited with {}", output.status)
+            } else {
+                message
+            });
+        }
+        let actual = parse_hashsum_output(&output.stdout)
+            .ok_or_else(|| "rclone verification returned no SHA-256 hash".to_string())?;
+        if actual != expected {
+            return Err(format!(
+                "Remote SHA-256 mismatch for {}: expected {}, got {}",
+                record.id, expected, actual
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -497,6 +605,14 @@ async fn sha256_file_async(path: &Path) -> Result<String, String> {
         .map_err(|error| format!("Checksum worker failed: {error}"))?
 }
 
+fn parse_hashsum_output(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .find(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,6 +626,16 @@ mod tests {
         assert_eq!(
             checksum,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn parse_hashsum_output_reads_rclone_checksum() {
+        let output =
+            b"E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  recording.mp4\n";
+        assert_eq!(
+            parse_hashsum_output(output).as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         );
     }
 }

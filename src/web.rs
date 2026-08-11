@@ -1130,6 +1130,7 @@ async fn get_v1_recordings(
                     status: recording.status,
                     archive_available,
                     checksum_sha256: recording.checksum_sha256,
+                    archive_verified: recording.archive_verified,
                 }
             })
             .collect::<Vec<_>>(),
@@ -1196,6 +1197,7 @@ fn recording_summary(recording: Recording) -> RecordingSummary {
         status: recording.status,
         archive_available,
         checksum_sha256: recording.checksum_sha256,
+        archive_verified: recording.archive_verified,
     }
 }
 
@@ -2131,6 +2133,7 @@ struct RecordingConfigResponse {
     enabled: bool,
     live_enabled: bool,
     archive_enabled: bool,
+    archive_verify: bool,
     archive_configured: bool,
     segment_seconds: u32,
     local_retention_days: u32,
@@ -2144,6 +2147,7 @@ fn recording_config_response(state: &AppState) -> RecordingConfigResponse {
         enabled: config.recordings_enabled,
         live_enabled: config.live_enabled,
         archive_enabled: config.archive_enabled,
+        archive_verify: config.archive_verify,
         archive_configured: !config.archive_remote.trim().is_empty(),
         segment_seconds: config.segment_seconds,
         local_retention_days: config.local_retention_days,

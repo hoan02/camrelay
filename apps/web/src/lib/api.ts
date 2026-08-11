@@ -36,6 +36,7 @@ export type Recording = {
   status: string;
   archive_available: boolean;
   checksum_sha256: string | null;
+  archive_verified: boolean;
 };
 
 export type RecordingConfig = {
@@ -43,6 +44,7 @@ export type RecordingConfig = {
   live_enabled: boolean;
   archive_enabled: boolean;
   archive_configured: boolean;
+  archive_verify: boolean;
   segment_seconds: number;
   local_retention_days: number;
   ffmpeg_path: string;

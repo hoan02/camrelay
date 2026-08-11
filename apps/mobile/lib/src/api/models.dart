@@ -67,6 +67,7 @@ class RecordingSummary {
     required this.status,
     required this.archiveAvailable,
     required this.checksumSha256,
+    required this.archiveVerified,
   });
 
   final String id;
@@ -79,6 +80,7 @@ class RecordingSummary {
   final String status;
   final bool archiveAvailable;
   final String? checksumSha256;
+  final bool archiveVerified;
 
   factory RecordingSummary.fromJson(Map<String, dynamic> json) =>
       RecordingSummary(
@@ -93,6 +95,7 @@ class RecordingSummary {
         status: json['status'] as String? ?? 'unknown',
         archiveAvailable: json['archive_available'] as bool? ?? false,
         checksumSha256: json['checksum_sha256'] as String?,
+        archiveVerified: json['archive_verified'] as bool? ?? false,
       );
 }
 
