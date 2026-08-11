@@ -23,7 +23,7 @@ use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
-use camrelay_contract::{CameraSummary, RecordingSummary, API_VERSION};
+use camrelay_contract::{CameraSummary, ProviderSummary, RecordingSummary, API_VERSION};
 use camrelay_storage::Storage;
 
 use crate::config::{
@@ -252,6 +252,41 @@ async fn get_v1_recordings(
             })
             .collect::<Vec<_>>(),
     )
+}
+
+async fn get_v1_providers(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.list_providers().await {
+            Ok(providers) => Json(
+                providers
+                    .into_iter()
+                    .map(|provider| ProviderSummary {
+                        id: provider.id,
+                        name: provider.name,
+                        main_server: provider.main_server,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(
+        load_brands()
+            .into_iter()
+            .map(|brand| ProviderSummary {
+                id: brand.id,
+                name: brand.name,
+                main_server: brand.main_server,
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
 }
 
 async fn get_brands_handler() -> impl IntoResponse {
@@ -839,6 +874,7 @@ pub fn create_router(state: AppState) -> Router {
     let v1_public = Router::new().route("/health", get(v1_health));
     let v1_protected = Router::new()
         .route("/cameras", get(get_v1_cameras))
+        .route("/providers", get(get_v1_providers))
         .route("/recordings", get(get_v1_recordings))
         .layer(middleware::from_fn_with_state(
             state.clone(),

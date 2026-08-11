@@ -153,6 +153,21 @@ impl Storage {
             .collect()
     }
 
+    pub async fn list_providers(&self) -> Result<Vec<StoredProvider>, StorageError> {
+        let rows = sqlx::query("SELECT id, name, main_server FROM providers ORDER BY name, id")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(StoredProvider {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    main_server: row.try_get("main_server")?,
+                })
+            })
+            .collect()
+    }
+
     pub async fn verify_user(&self, username: &str, password: &str) -> Result<bool, StorageError> {
         let hash =
             sqlx::query_scalar::<_, String>("SELECT password_hash FROM users WHERE username = ?")
@@ -287,6 +302,13 @@ pub struct StoredCamera {
     pub serial: String,
     pub local_port: u16,
     pub auto_start: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredProvider {
+    pub id: String,
+    pub name: String,
+    pub main_server: String,
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: impl AsRef<Path>) -> Result<T, StorageError> {

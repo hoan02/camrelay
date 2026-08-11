@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, Camera } from "../lib/api";
+import { Locale, translate } from "../lib/i18n";
 
 type IconName = "grid" | "camera" | "archive" | "settings" | "info" | "plus" | "arrow" | "sun" | "moon" | "logout" | "menu";
 
@@ -23,53 +24,67 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 }
 
 const navItems: Array<{ to: string; label: string; icon: IconName }> = [
-  { to: "/dashboard", label: "Dashboard", icon: "grid" },
-  { to: "/cameras", label: "Cameras", icon: "camera" },
-  { to: "/recordings", label: "Recordings", icon: "archive" },
+  { to: "/dashboard", label: "nav.dashboard", icon: "grid" },
+  { to: "/cameras", label: "nav.cameras", icon: "camera" },
+  { to: "/providers", label: "nav.providers", icon: "settings" },
+  { to: "/recordings", label: "nav.recordings", icon: "archive" },
 ];
 
+type Theme = "dark" | "light";
+const LocaleContext = createContext<{ locale: Locale; setLocale: (locale: Locale) => void; t: (key: string) => string } | null>(null);
+const ThemeContext = createContext<{ theme: Theme; setTheme: (theme: Theme) => void; toggleTheme: () => void } | null>(null);
+function useLocale() { const value = useContext(LocaleContext); if (!value) throw new Error("Locale context is missing"); return value; }
+function useTheme() { const value = useContext(ThemeContext); if (!value) throw new Error("Theme context is missing"); return value; }
+
 export function App() {
-  return <Routes>
+  const [locale, setLocaleState] = useState<Locale>(() => window.localStorage.getItem("camrelay_locale") === "vi" ? "vi" : "en");
+  const [theme, setTheme] = useState<Theme>(() => window.localStorage.getItem("camrelay_theme") === "light" ? "light" : "dark");
+  const setLocale = (next: Locale) => { setLocaleState(next); window.localStorage.setItem("camrelay_locale", next); };
+  const toggleTheme = () => setTheme(current => current === "dark" ? "light" : "dark");
+  useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem("camrelay_theme", theme); }, [theme]);
+  const t = (key: string) => translate(locale, key);
+  return <LocaleContext.Provider value={{ locale, setLocale, t }}><ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}><Routes>
     <Route path="/login" element={<Login />} />
     <Route element={<ProtectedLayout />}>
       <Route index element={<Navigate to="/dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
       <Route path="cameras" element={<Cameras />} />
+      <Route path="providers" element={<Providers />} />
       <Route path="recordings" element={<Recordings />} />
-      <Route path="settings" element={<Placeholder title="Settings" eyebrow="CONTROL PLANE" description="Identity, providers, storage, and notification policies are being separated into this workspace." icon="settings" />} />
+      <Route path="settings" element={<Settings />} />
       <Route path="about" element={<Placeholder title="About Camrelay" eyebrow="SYSTEM NOTES" description="Technical architecture, security boundaries, and provider capability notes will be documented here." icon="info" />} />
     </Route>
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
-  </Routes>;
+  </Routes></ThemeContext.Provider></LocaleContext.Provider>;
 }
 
 function ProtectedLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [theme, setTheme] = useState(() => window.localStorage.getItem("camrelay_theme") ?? "dark");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { t } = useLocale();
+  const { theme, toggleTheme } = useTheme();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
 
-  useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem("camrelay_theme", theme); }, [theme]);
   if (!window.localStorage.getItem("camrelay_authenticated") && !window.localStorage.getItem("camrelay_access_token")) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
 
   const logout = async () => { await api.logout().catch(() => undefined); window.localStorage.removeItem("camrelay_authenticated"); window.localStorage.removeItem("camrelay_access_token"); navigate("/login"); };
   return <div className="app-shell">
     <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
       <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>camrelay</span></div>
-      <div className="sidebar-kicker">CONTROL PLANE</div>
+      <div className="sidebar-kicker">{t("sidebar.kicker")}</div>
       <nav className="nav-list" aria-label="Primary navigation">
-        {navItems.map(item => <NavLink onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to={item.to} key={item.to}><Icon name={item.icon} /><span>{item.label}</span></NavLink>)}
+        {navItems.map(item => <NavLink onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to={item.to} key={item.to}><Icon name={item.icon} /><span>{t(item.label)}</span></NavLink>)}
       </nav>
       <div className="sidebar-bottom">
-        <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/settings"><Icon name="settings" /><span>Settings</span></NavLink>
-        <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/about"><Icon name="info" /><span>About</span></NavLink>
-        <div className="profile-card"><span className="avatar">C</span><span className="profile-copy"><b>Camrelay admin</b><small>Local appliance</small></span><button className="icon-button subtle" onClick={logout} title="Sign out"><Icon name="logout" size={16} /></button></div>
+        <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/settings"><Icon name="settings" /><span>{t("nav.settings")}</span></NavLink>
+        <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/about"><Icon name="info" /><span>{t("nav.about")}</span></NavLink>
+        <div className="profile-card"><span className="avatar">C</span><span className="profile-copy"><b>{t("profile.admin")}</b><small>{t("profile.local")}</small></span><button className="icon-button subtle" onClick={logout} title={t("action.signout")}><Icon name="logout" size={16} /></button></div>
       </div>
     </aside>
     {mobileOpen && <button className="scrim" onClick={() => setMobileOpen(false)} aria-label="Close menu" />}
     <main className="main-area">
-      <header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Icon name="menu" /></button><div className="crumb"><span>Camrelay</span><b>/</b><strong>{location.pathname.slice(1) || "dashboard"}</strong></div><div className="top-actions"><span className={`runtime-pill ${health.isError || health.data?.status === "degraded" ? "runtime-warning" : ""}`}><i /> {health.isLoading ? "Checking API" : health.isError ? "API unavailable" : "Relay ready"}</span><button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle theme"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button></div></header>
+      <header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Icon name="menu" /></button><div className="crumb"><span>Camrelay</span><b>/</b><strong>{location.pathname.slice(1) || "dashboard"}</strong></div><div className="top-actions"><span className={`runtime-pill ${health.isError || health.data?.status === "degraded" ? "runtime-warning" : ""}`}><i /> {health.isLoading ? t("runtime.checking") : health.isError ? t("runtime.unavailable") : t("runtime.ready")}</span><button className="icon-button" onClick={toggleTheme} title={theme === "dark" ? t("settings.theme.light") : t("settings.theme.dark")}><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button></div></header>
       <div className="page-content"><Outlet /></div>
     </main>
   </div>;
@@ -107,6 +122,11 @@ function Recordings() {
   return <><PageHeading eyebrow="MEDIA LIBRARY" title="Recordings" description="Closed segments, local retention, and the path to your cloud archive." />{isLoading && <div className="panel loading-panel">Loading recording index…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>Recording API is not connected</h2><p>The new media surface is wired to the v1 contract and will remain read-only until archive controls migrate.</p></div>}{recordings && recordings.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>No closed segments</h2><p>Once recording is enabled and a segment closes, it will appear here with its retention and archive state.</p></div>}{recordings && recordings.length > 0 && <div className="panel recordings-list"><div className="recordings-header"><span>SEGMENT</span><span>CAMERA</span><span>STATUS</span><span>SIZE</span></div>{recordings.map(recording => <div className="recording-row" key={recording.id}><div><b>{formatDate(recording.started_at)}</b><small>{recording.kind}{recording.ended_at ? ` · ${formatTime(recording.ended_at)}` : " · in progress"}</small></div><span>{recording.camera_name}</span><span className={`recording-status ${recording.status}`}>{recording.archive_available ? "Archived" : recording.status}</span><span>{formatBytes(recording.bytes)}</span></div>)}</div>}</>;
 }
 
+function Providers() {
+  const { data: providers, isLoading, isError } = useQuery({ queryKey: ["providers"], queryFn: api.providers });
+  return <><PageHeading eyebrow="P2P PROFILES" title="Providers" description="Signaling profiles used by the relay. Secrets stay server-side and compatibility is always device-tested." />{isLoading && <div className="panel loading-panel">Loading provider profiles…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>Provider API is not connected</h2><p>Provider editing will be enabled after the secret-backed v1 write contract is migrated.</p></div>}{providers && providers.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="settings" /></span><h2>No provider profiles</h2><p>Add an authorized P2P platform profile before onboarding a camera.</p></div>}{providers && providers.length > 0 && <div className="provider-grid">{providers.map(provider => <article className="provider-card" key={provider.id}><div className="provider-icon"><span className="brand-mark tiny"><i /><i /><i /></span></div><div className="provider-copy"><h2>{provider.name}</h2><p>{provider.main_server}</p></div><span className="provider-badge">Configured</span><small className="provider-note">Platform profile only · compatibility not implied</small></article>)}</div>}</>;
+}
+
 function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value)); }
 function formatTime(value: string) { return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(value)); }
 function formatBytes(value: number) { if (!value) return "—"; if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`; return `${(value / (1024 * 1024)).toFixed(1)} MB`; }
@@ -115,4 +135,10 @@ function CameraCard({ camera }: { camera: Camera }) { return <article className=
 
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
 function Metric({ label, value, detail, icon, tone = "default" }: { label: string; value: string; detail: string; icon: IconName; tone?: string }) { return <div className={`metric-card ${tone}`}><div className="metric-icon"><Icon name={icon} size={17} /></div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>; }
+function Settings() {
+  const { locale, setLocale, t } = useLocale();
+  const { theme, setTheme } = useTheme();
+  return <><PageHeading eyebrow={t("page.settings.eyebrow")} title={t("page.settings.title")} description={t("page.settings.description")} /><div className="settings-grid"><section className="panel setting-card"><div className="setting-heading"><span className="setting-icon"><Icon name="info" /></span><div><h2>{t("settings.language.title")}</h2><p>{t("settings.language.description")}</p></div></div><div className="choice-group"><button className={locale === "en" ? "choice active" : "choice"} onClick={() => setLocale("en")}>{t("settings.language.english")}</button><button className={locale === "vi" ? "choice active" : "choice"} onClick={() => setLocale("vi")}>{t("settings.language.vietnamese")}</button></div></section><section className="panel setting-card"><div className="setting-heading"><span className="setting-icon"><Icon name={theme === "dark" ? "moon" : "sun"} /></span><div><h2>{t("settings.theme.title")}</h2><p>{t("settings.theme.description")}</p></div></div><div className="choice-group"><button className={theme === "dark" ? "choice active" : "choice"} onClick={() => setTheme("dark")}>{t("settings.theme.dark")}</button><button className={theme === "light" ? "choice active" : "choice"} onClick={() => setTheme("light")}>{t("settings.theme.light")}</button></div></section><section className="panel setting-card security-setting"><div className="setting-heading"><span className="setting-icon"><Icon name="settings" /></span><div><h2>{t("settings.security.title")}</h2><p>{t("settings.security.description")}</p></div></div><span className="security-mark"><i /> HttpOnly session</span></section></div></>;
+}
+
 function Placeholder({ title, eyebrow, description, icon }: { title: string; eyebrow: string; description: string; icon: IconName }) { return <><PageHeading eyebrow={eyebrow} title={title} description={description} /><div className="panel empty-panel"><span className="empty-icon"><Icon name={icon} /></span><h2>Workspace boundary ready</h2><p>This route is intentionally present now so deep links and future clients have a stable information architecture.</p></div></>; }

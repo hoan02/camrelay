@@ -26,6 +26,12 @@ export type Recording = {
   archive_available: boolean;
 };
 
+export type Provider = {
+  id: string;
+  name: string;
+  main_server: string;
+};
+
 export type ApiErrorBody = {
   code?: string;
   message?: string;
@@ -68,4 +74,5 @@ export const api = {
   cameras: () => request<Camera[]>("/api/v1/cameras"),
   health: () => request<Health>("/api/v1/health"),
   recordings: () => request<Recording[]>("/api/v1/recordings"),
+  providers: () => request<Provider[]>("/api/v1/providers"),
 };

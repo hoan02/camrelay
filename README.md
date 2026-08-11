@@ -9,7 +9,7 @@ The project currently contains a multi-camera manager, a web dashboard, a REST A
 The `v1-foundation` branch is an incremental migration from the known `prototype-v0.1` relay baseline. The existing Rust binary and `static/` console remain the compatibility path while the new boundaries are built:
 
 - Rust is now a Cargo workspace with a transport-independent `camrelay-contract` crate.
-- `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, and an API client.
+- `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, persistent English/Vietnamese settings, and an API client.
 - `packages/design-tokens` is the first shared visual language seam for the future web and mobile clients.
 - The new console is not served by the Rust binary yet; run it separately during development. The legacy console stays in place until feature parity and migration tests pass.
 

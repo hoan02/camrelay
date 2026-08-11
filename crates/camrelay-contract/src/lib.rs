@@ -74,6 +74,13 @@ pub struct RecordingSummary {
     pub archive_available: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProviderSummary {
+    pub id: String,
+    pub name: String,
+    pub main_server: String,
+}
+
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
         Self { items, next_cursor }

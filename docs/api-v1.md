@@ -27,6 +27,7 @@ Implemented in the current migration checkpoint:
 
     GET    /api/v1/health                 public migration health
     GET    /api/v1/cameras                authenticated, secret-free summaries
+    GET    /api/v1/providers               authenticated, secret-free summaries
     GET    /api/v1/recordings              authenticated, secret-free summaries
 
 The endpoints below are the target contract and remain pending until their
