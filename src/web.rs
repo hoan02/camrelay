@@ -29,8 +29,8 @@ use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 use camrelay_contract::{
-    ApiTokenSummary, AuditEventSummary, CameraSummary, ProviderSummary, RecordingSummary,
-    UserSummary, API_VERSION,
+    ApiTokenSummary, AuditEventSummary, CameraSummary, EventSummary, ProviderSummary,
+    RecordingSummary, UserSummary, API_VERSION,
 };
 use camrelay_storage::{LegacyCamera, Storage, StoredCameraConfig, StoredProviderConfig};
 
@@ -1137,18 +1137,6 @@ async fn get_v1_recordings(
     )
 }
 
-#[derive(Serialize)]
-struct EventSummary {
-    id: String,
-    kind: String,
-    camera_id: String,
-    camera_name: String,
-    occurred_at: String,
-    severity: String,
-    message: String,
-    source: String,
-}
-
 async fn get_v1_events(
     State(state): State<AppState>,
     Query(query): Query<RecordingsQuery>,
@@ -1168,6 +1156,7 @@ async fn get_v1_events(
         .map(|recording| EventSummary {
             id: format!("recording:{}", recording.id),
             kind: "recording.segment".to_string(),
+            recording_id: Some(recording.id.clone()),
             camera_id: recording.camera_id,
             camera_name: recording.camera_name,
             occurred_at: recording
@@ -2168,6 +2157,10 @@ async fn get_v1_recording_config(State(state): State<AppState>) -> impl IntoResp
     Json(recording_config_response(&state))
 }
 
+async fn get_v1_retention_preview(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.recording_manager.retention_preview())
+}
+
 async fn archive_recording_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2212,6 +2205,48 @@ async fn issue_playback_ticket(
         Json(PlaybackTicketResponse {
             url: format!("/api/playback/{}?ticket={}", id, ticket),
             expires_in_seconds: 600,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Serialize)]
+struct ThumbnailTicketResponse {
+    url: String,
+    expires_in_seconds: u64,
+}
+
+async fn issue_thumbnail_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let Some(recording) = state.recording_manager.get(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !FsPath::new(&recording.local_path).is_file() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "recording.thumbnail_unavailable",
+                "message": "A local recording file is required to generate a thumbnail."
+            })),
+        )
+            .into_response();
+    }
+    let ticket = Uuid::new_v4().to_string();
+    let expires_in_seconds = 600;
+    state.playback_tickets.lock().unwrap().insert(
+        ticket.clone(),
+        PlaybackGrant {
+            recording_id: id.clone(),
+            expires_at: Instant::now() + Duration::from_secs(expires_in_seconds),
+        },
+    );
+    (
+        StatusCode::OK,
+        Json(ThumbnailTicketResponse {
+            url: format!("/api/v1/thumbnails/{id}?ticket={ticket}"),
+            expires_in_seconds,
         }),
     )
         .into_response()
@@ -2508,6 +2543,38 @@ async fn stream_recording_handler(
     response
 }
 
+async fn stream_thumbnail_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let thumbnail = match state.recording_manager.ensure_thumbnail(&id).await {
+        Ok(path) => path,
+        Err(error) if error == "Recording not found" => {
+            return StatusCode::NOT_FOUND.into_response()
+        }
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "code": "recording.thumbnail_failed",
+                    "message": error
+                })),
+            )
+                .into_response()
+        }
+    };
+    let content = match tokio::fs::read(thumbnail).await {
+        Ok(content) => content,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .body(Body::from(content))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 fn camera_from_storage(camera: StoredCameraConfig) -> Camera {
     Camera {
         id: camera.id,
@@ -2567,6 +2634,10 @@ pub fn create_router(state: AppState) -> Router {
             "/recordings/:id/playback-ticket",
             post(issue_playback_ticket),
         )
+        .route(
+            "/recordings/:id/thumbnail-ticket",
+            post(issue_thumbnail_ticket),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -2577,6 +2648,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/logout", post(logout));
     let playback_router = Router::new()
         .route("/playback/:id", get(stream_recording_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            playback_auth_middleware,
+        ));
+    let v1_thumbnail_router = Router::new()
+        .route("/thumbnails/:id", get(stream_thumbnail_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             playback_auth_middleware,
@@ -2613,11 +2690,19 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/recordings", get(get_v1_recordings))
         .route("/recordings/config", get(get_v1_recording_config))
+        .route(
+            "/recordings/retention-preview",
+            get(get_v1_retention_preview),
+        )
         .route("/events", get(get_v1_events))
         .route("/recordings/:id", get(get_v1_recording))
         .route(
             "/recordings/:id/playback-ticket",
             post(issue_playback_ticket),
+        )
+        .route(
+            "/recordings/:id/thumbnail-ticket",
+            post(issue_thumbnail_ticket),
         )
         .route("/recordings/:id/archive", post(archive_v1_recording))
         .route("/tokens", get(get_v1_tokens).post(create_v1_token))
@@ -2639,6 +2724,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", playback_router)
         .nest("/api/v1", v1_public)
         .nest("/api/v1", v1_auth)
+        .nest("/api/v1", v1_thumbnail_router)
         .nest("/api/v1", v1_protected)
         // `fallback` preserves the index file's 200 status for SPA deep links;
         // `not_found_service` would return the right body with a misleading 404.

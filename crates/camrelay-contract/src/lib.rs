@@ -77,6 +77,29 @@ pub struct RecordingSummary {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RetentionPreview {
+    pub configured_days: u32,
+    pub auto_delete_enabled: bool,
+    pub eligible_count: usize,
+    pub eligible_bytes: u64,
+    pub blocked_unarchived_count: usize,
+    pub oldest_eligible_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EventSummary {
+    pub id: String,
+    pub kind: String,
+    pub recording_id: Option<String>,
+    pub camera_id: String,
+    pub camera_name: String,
+    pub occurred_at: String,
+    pub severity: String,
+    pub message: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProviderSummary {
     pub id: String,
     pub name: String,

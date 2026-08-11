@@ -343,6 +343,7 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 | GET | `/api/recordings` | List indexed recording segments with optional camera/status filters. |
 | GET | `/api/recordings/config` | Read safe recording/archive capability settings. |
 | POST | `/api/recordings/:id/playback-ticket` | Issue a short-lived ticket for one recording. |
+| POST | `/api/recordings/:id/thumbnail-ticket` | Issue a short-lived ticket for a local JPEG thumbnail. |
 | GET | `/api/playback/:id?ticket=...` | Stream local or archived MP4 with Range support. |
 | POST | `/api/recordings/:id/archive` | Upload one segment through the configured rclone remote. |
 
@@ -363,7 +364,7 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 - Relay mode exists in the handshake code but is not exposed as a per-camera setting.
 - The web server has no built-in TLS.
 - Runtime JSON is plaintext and writes are not transactional.
-- Recording files are local plaintext media; local_retention_days defaults to 0 (never delete automatically).
+- Recording files are local plaintext media; local_retention_days defaults to 0 (never delete automatically). The v1 API exposes a read-only retention preview; automatic deletion is not enabled.
 - Provider probe state is kept in the current browser session and must be repeated after a reload or service restart.
 - Error handling and reconnect behavior still need hardening for unattended NVR use.
 
@@ -373,13 +374,13 @@ Completed in the v1 foundation:
 
 - versioned API contract, SQLite persistence, encrypted device/provider secrets, auth sessions, RBAC, token management, readiness, and CRUD;
 - React console routes for dashboard/live wall, cameras, providers, filtered recordings/timeline, tokens, settings, audit history, and technical notes;
-- local recording playback tickets, Range streaming, archive actions, privacy-safe audit history, backup/restore scripts, and Compose configuration.
+- local recording playback/thumbnail tickets, Range streaming, archive actions, read-only retention preview, privacy-safe audit history, backup/restore scripts, and Compose configuration.
 
 Next, in order:
 
 1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
 2. Add a WebRTC media gateway (MediaMTX, go2rtc, or an in-process alternative) behind the existing credential-free local proxy; HLS is already available for web/mobile and Frigate/FFmpeg integrations.
-3. Add retention policy, remote checksum/resume verification, thumbnails, and event markers; local recording SHA-256 metadata is now indexed.
+3. Add operator-approved retention cleanup, resumable archive transfer, and event markers; local JPEG thumbnail generation, recording SHA-256 metadata, remote verification, and a read-only retention preview are now indexed/exposed.
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
 5. Validate ticket-backed playback on an authorized Android device and complete the iOS runner/device build on macOS; then add a WebRTC adapter when the gateway contract is finalized.
 

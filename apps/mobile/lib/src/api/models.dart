@@ -103,6 +103,7 @@ class EventSummary {
   const EventSummary({
     required this.id,
     required this.kind,
+    required this.recordingId,
     required this.cameraId,
     required this.cameraName,
     required this.occurredAt,
@@ -113,6 +114,7 @@ class EventSummary {
 
   final String id;
   final String kind;
+  final String? recordingId;
   final String cameraId;
   final String cameraName;
   final DateTime occurredAt;
@@ -123,6 +125,7 @@ class EventSummary {
   factory EventSummary.fromJson(Map<String, dynamic> json) => EventSummary(
         id: json['id'] as String? ?? '',
         kind: json['kind'] as String? ?? 'activity',
+        recordingId: json['recording_id'] as String?,
         cameraId: json['camera_id'] as String? ?? '',
         cameraName: json['camera_name'] as String? ?? '',
         occurredAt: DateTime.tryParse(json['occurred_at'] as String? ?? '') ??
@@ -140,6 +143,19 @@ class PlaybackTicket {
   final int expiresInSeconds;
 
   factory PlaybackTicket.fromJson(Map<String, dynamic> json) => PlaybackTicket(
+        url: json['url'] as String? ?? '',
+        expiresInSeconds: (json['expires_in_seconds'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class ThumbnailTicket {
+  const ThumbnailTicket({required this.url, required this.expiresInSeconds});
+
+  final String url;
+  final int expiresInSeconds;
+
+  factory ThumbnailTicket.fromJson(Map<String, dynamic> json) =>
+      ThumbnailTicket(
         url: json['url'] as String? ?? '',
         expiresInSeconds: (json['expires_in_seconds'] as num?)?.toInt() ?? 0,
       );

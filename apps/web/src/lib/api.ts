@@ -53,7 +53,17 @@ export type RecordingConfig = {
   checksum_algorithm: string;
 };
 
+export type RetentionPreview = {
+  configured_days: number;
+  auto_delete_enabled: boolean;
+  eligible_count: number;
+  eligible_bytes: number;
+  blocked_unarchived_count: number;
+  oldest_eligible_at: string | null;
+};
+
 export type PlaybackTicket = { url: string; expires_in_seconds: number };
+export type ThumbnailTicket = { url: string; expires_in_seconds: number };
 export type LiveTicket = { protocol: string; url: string; expires_in_seconds: number };
 
 export type Provider = {
@@ -85,6 +95,7 @@ export type CameraDiagnostics = {
 export type EventSummary = {
   id: string;
   kind: string;
+  recording_id: string | null;
   camera_id: string;
   camera_name: string;
   occurred_at: string;
@@ -155,6 +166,7 @@ export const api = {
   deleteCamera: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: "DELETE" }),
   health: () => request<Health>("/api/v1/health"),
   recordingConfig: () => request<RecordingConfig>("/api/v1/recordings/config"),
+  retentionPreview: () => request<RetentionPreview>("/api/v1/recordings/retention-preview"),
   recordings: (filters: { camera_id?: string; status?: string } = {}) => {
     const params = new URLSearchParams();
     if (filters.camera_id) params.set("camera_id", filters.camera_id);
@@ -163,6 +175,7 @@ export const api = {
     return request<Recording[]>(`/api/v1/recordings${query ? `?${query}` : ""}`);
   },
   playbackTicket: (id: string) => request<PlaybackTicket>(`/api/v1/recordings/${id}/playback-ticket`, { method: "POST" }),
+  thumbnailTicket: (id: string) => request<ThumbnailTicket>(`/api/v1/recordings/${id}/thumbnail-ticket`, { method: "POST" }),
   archiveRecording: (id: string) => request<Recording>(`/api/v1/recordings/${id}/archive`, { method: "POST" }),
   providers: () => request<Provider[]>("/api/v1/providers"),
   createProvider: (input: ProviderInput) => request<Provider>("/api/v1/providers", { method: "POST", body: JSON.stringify(input) }),

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration as StdDuration, SystemTime},
 };
@@ -21,6 +21,7 @@ use crate::{
     rtsp_proxy::RtspProxyManager,
     tunnel::{TunnelManager, TunnelStatus},
 };
+use camrelay_contract::RetentionPreview;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Recording {
@@ -103,6 +104,133 @@ impl RecordingManager {
 
     pub fn config(&self) -> &AppConfig {
         &self.config
+    }
+
+    /// Calculates a safe, read-only retention preview. Deletion is deliberately
+    /// not part of this method; an operations policy must explicitly define
+    /// archive guarantees and an operator-approved cleanup action first.
+    pub fn retention_preview(&self) -> RetentionPreview {
+        let configured_days = self.config.local_retention_days;
+        if configured_days == 0 {
+            return RetentionPreview {
+                configured_days,
+                auto_delete_enabled: false,
+                eligible_count: 0,
+                eligible_bytes: 0,
+                blocked_unarchived_count: 0,
+                oldest_eligible_at: None,
+            };
+        }
+
+        let cutoff = Utc::now() - chrono::Duration::days(i64::from(configured_days));
+        let mut eligible_count = 0;
+        let mut eligible_bytes: u64 = 0;
+        let mut blocked_unarchived_count = 0;
+        let mut oldest_eligible: Option<(DateTime<Utc>, String)> = None;
+
+        for record in self.list() {
+            if !matches!(record.status.as_str(), "local" | "archived") {
+                continue;
+            }
+            let Some(ended_at) = record
+                .ended_at
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+            else {
+                continue;
+            };
+            if ended_at >= cutoff || !Path::new(&record.local_path).is_file() {
+                continue;
+            }
+            if self.config.archive_enabled && record.status != "archived" {
+                blocked_unarchived_count += 1;
+                continue;
+            }
+            eligible_count += 1;
+            eligible_bytes = eligible_bytes.saturating_add(record.bytes);
+            if oldest_eligible
+                .as_ref()
+                .map(|(oldest, _)| ended_at < *oldest)
+                .unwrap_or(true)
+            {
+                oldest_eligible = Some((ended_at, record.ended_at.unwrap_or_default()));
+            }
+        }
+
+        RetentionPreview {
+            configured_days,
+            auto_delete_enabled: false,
+            eligible_count,
+            eligible_bytes,
+            blocked_unarchived_count,
+            oldest_eligible_at: oldest_eligible.map(|(_, value)| value),
+        }
+    }
+
+    /// Generates a small local JPEG thumbnail on demand. Remote-only archive
+    /// objects are intentionally not downloaded just to create a preview.
+    pub async fn ensure_thumbnail(&self, id: &str) -> Result<PathBuf, String> {
+        let record = self
+            .get(id)
+            .ok_or_else(|| "Recording not found".to_string())?;
+        let source = PathBuf::from(&record.local_path);
+        if !source.is_file() {
+            return Err("Local recording file is unavailable for thumbnail generation".to_string());
+        }
+        let thumbnail = source.with_extension("jpg");
+        if thumbnail.is_file() {
+            let source_modified = fs::metadata(&source).and_then(|metadata| metadata.modified());
+            let thumbnail_modified =
+                fs::metadata(&thumbnail).and_then(|metadata| metadata.modified());
+            if let (Ok(source_modified), Ok(thumbnail_modified)) =
+                (source_modified, thumbnail_modified)
+            {
+                if thumbnail_modified >= source_modified {
+                    return Ok(thumbnail);
+                }
+            }
+        }
+
+        // Keep a `.jpg` suffix so FFmpeg can infer the image muxer while the
+        // incomplete file remains distinguishable from a published thumbnail.
+        let temporary = thumbnail.with_extension("part.jpg");
+        let source_string = source.to_string_lossy().to_string();
+        let temporary_string = temporary.to_string_lossy().to_string();
+        let output = Command::new(&self.config.ffmpeg_path)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                "0.5",
+                "-i",
+                &source_string,
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale='min(640,iw)':-2",
+                "-q:v",
+                "5",
+                &temporary_string,
+            ])
+            .output()
+            .await
+            .map_err(|error| format!("Could not start thumbnail generator: {error}"))?;
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(if error.is_empty() {
+                format!("FFmpeg thumbnail generation exited with {}", output.status)
+            } else {
+                error
+            });
+        }
+        tokio::fs::rename(&temporary, &thumbnail)
+            .await
+            .map_err(|error| format!("Could not publish recording thumbnail: {error}"))?;
+        Ok(thumbnail)
     }
 
     pub async fn reconcile(&self, cameras: &[Camera], tunnels: &TunnelManager) {
@@ -637,5 +765,16 @@ mod tests {
             parse_hashsum_output(output).as_deref(),
             Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
         );
+    }
+
+    #[test]
+    fn retention_preview_is_non_destructive_when_disabled() {
+        let manager = RecordingManager::new(AppConfig::default(), RtspProxyManager::new());
+        let preview = manager.retention_preview();
+
+        assert_eq!(preview.configured_days, 0);
+        assert!(!preview.auto_delete_enabled);
+        assert_eq!(preview.eligible_count, 0);
+        assert_eq!(preview.eligible_bytes, 0);
     }
 }

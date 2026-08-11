@@ -334,6 +334,7 @@ function Settings() {
   const { locale, setLocale, t } = useLocale();
   const { theme, setTheme } = useTheme();
   const { data: media, isLoading: mediaLoading, isError: mediaError } = useQuery({ queryKey: ["recording-config"], queryFn: api.recordingConfig });
+  const { data: retention } = useQuery({ queryKey: ["retention-preview"], queryFn: api.retentionPreview });
   const stateLabel = (enabled: boolean | undefined) => enabled === undefined ? "—" : enabled ? t("settings.media.ready") : t("settings.media.off");
 
   return (
@@ -360,6 +361,7 @@ function Settings() {
             <div><span>{t("settings.media.verification")}</span><strong>{media.archive_verify ? t("settings.media.ready") : t("settings.media.off")}</strong></div>
             <div><span>{t("settings.media.segment")}</span><strong>{media.segment_seconds + "s"}</strong></div>
             <div><span>{t("settings.media.retention")}</span><strong>{media.local_retention_days > 0 ? media.local_retention_days + "d" : t("settings.media.never")}</strong></div>
+            <div><span>{t("settings.media.retentionPreview")}</span><strong>{retention ? (retention.eligible_count === 0 ? t("settings.media.noneEligible") : `${retention.eligible_count} · ${formatBytes(retention.eligible_bytes)}`) : "—"}</strong></div>
             <div><span>{t("settings.media.checksum")}</span><strong>{media.checksum_algorithm.toUpperCase()}</strong></div>
           </div>}
         </section>

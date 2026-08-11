@@ -320,6 +320,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecordingConfig'
+  /api/v1/recordings/retention-preview:
+    get:
+      summary: Preview local retention candidates
+      description: Returns a read-only retention calculation. It never deletes files; segments that are not archived are reported as blocked when archive is enabled.
+      responses:
+        '200':
+          description: Retention preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPreview'
   /api/v1/recordings/{recording_id}:
     parameters:
       - name: recording_id
@@ -350,6 +361,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PlaybackTicket'
+  /api/v1/recordings/{recording_id}/thumbnail-ticket:
+    post:
+      summary: Issue a short-lived local thumbnail ticket
+      description: Returns a scoped URL for an on-demand JPEG thumbnail generated from a local MP4. Archived-only recordings do not produce thumbnails.
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Thumbnail URL and expiry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThumbnailTicket'
+  /api/v1/thumbnails/{recording_id}:
+    get:
+      security: []
+      summary: Read a scoped local JPEG thumbnail
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: ticket
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: JPEG thumbnail
+          content:
+            image/jpeg: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/recordings/{recording_id}/archive:
     post:
       summary: Queue or perform archive upload
@@ -372,6 +419,12 @@ paths:
       responses:
         '200':
           description: Activity events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EventSummary'
   /api/v1/audit:
     get:
       summary: List privacy-safe mutation audit events
@@ -555,6 +608,12 @@ components:
       properties:
         url: { type: string }
         expires_in_seconds: { type: integer, minimum: 1 }
+    ThumbnailTicket:
+      type: object
+      required: [url, expires_in_seconds]
+      properties:
+        url: { type: string }
+        expires_in_seconds: { type: integer, minimum: 1 }
     RecordingSummary:
       type: object
       required: [id, camera_id, camera_name, started_at, ended_at, kind, bytes, status, archive_available, checksum_sha256, archive_verified]
@@ -587,6 +646,29 @@ components:
         local_retention_days: { type: integer, minimum: 0 }
         ffmpeg_path: { type: string }
         checksum_algorithm: { type: string, enum: [sha256] }
+    RetentionPreview:
+      type: object
+      required: [configured_days, auto_delete_enabled, eligible_count, eligible_bytes, blocked_unarchived_count, oldest_eligible_at]
+      properties:
+        configured_days: { type: integer, minimum: 0 }
+        auto_delete_enabled: { type: boolean, enum: [false] }
+        eligible_count: { type: integer, minimum: 0 }
+        eligible_bytes: { type: integer, format: int64, minimum: 0 }
+        blocked_unarchived_count: { type: integer, minimum: 0 }
+        oldest_eligible_at: { type: string, nullable: true, format: date-time }
+    EventSummary:
+      type: object
+      required: [id, kind, recording_id, camera_id, camera_name, occurred_at, severity, message, source]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        recording_id: { type: string, nullable: true }
+        camera_id: { type: string }
+        camera_name: { type: string }
+        occurred_at: { type: string, format: date-time }
+        severity: { type: string }
+        message: { type: string }
+        source: { type: string }
     ProviderInput:
       allOf:
         - $ref: '#/components/schemas/ProviderPatch'

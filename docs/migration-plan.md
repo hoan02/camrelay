@@ -16,10 +16,12 @@ being stored. The migration marker prevents duplicate user/import work, while
 upserts keep repeated legacy snapshots convergent.
 
 The current startup path does not silently create a legacy-file backup or offer a
-dry-run flag. Take an explicit deployment backup with
-`deploy/compose/backup.ps1` (or an equivalent stopped-service filesystem
-snapshot) before enabling SQLite. A future migration command will add a
-read-only preview and automatic timestamped backup.
+an in-process dry-run flag. Use
+`deploy/compose/migration-preview.ps1` for a read-only preflight, then take an
+explicit deployment backup with `deploy/compose/backup.ps1` (or an equivalent
+stopped-service filesystem snapshot) before enabling SQLite. The preview does
+not print secrets and exits non-zero for malformed JSON, duplicate identifiers,
+invalid local ports, or missing provider references.
 
 - Backup and restore are explicit deployment operations.
 - IDs are preserved where possible.

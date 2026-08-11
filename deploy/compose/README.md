@@ -5,7 +5,16 @@
    `config.json`, `brands.json`, `cameras.json`, and `tokens.json`.
 3. Keep `database_enabled` false for the first boot, verify the relay, then
    enable it only after backing up the secret key.
-4. Start the service:
+4. Preview the legacy JSON migration before enabling SQLite:
+
+   ```powershell
+   ./migration-preview.ps1 -DataDir ./data
+   ```
+
+   The preview reports counts, duplicate IDs/ports, missing provider
+   references, parse errors, and whether `CAMRELAY_SECRET_KEY` is present. It
+   never prints credential values or changes the data directory.
+5. Start the service:
 
    ```bash
    docker compose up -d --build

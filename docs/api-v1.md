@@ -33,8 +33,11 @@ Implemented in the current migration checkpoint:
     POST   /api/v1/providers               authenticated provider onboarding
     GET    /api/v1/recordings              authenticated summaries; optional camera_id/status/limit filters
     GET    /api/v1/recordings/config       authenticated recording/archive capability state
+    GET    /api/v1/recordings/retention-preview authenticated read-only retention calculation
     GET    /api/v1/recordings/{recording_id} authenticated, secret-free detail
     POST   /api/v1/recordings/{recording_id}/playback-ticket
+    POST   /api/v1/recordings/{recording_id}/thumbnail-ticket
+    GET    /api/v1/thumbnails/{recording_id}?ticket=... scoped local JPEG thumbnail
     POST   /api/v1/recordings/{recording_id}/archive
     GET    /api/v1/tunnels                 authenticated, secret-free lifecycle status
     GET    /api/v1/tokens                  authenticated, secret-free summaries
@@ -67,14 +70,14 @@ The live media transport currently exposes ticketed HLS. WebRTC connection
 metadata remains a later media-gateway phase.
 
 The events endpoint currently returns normalized recording/system activity. Each
-recording segment is represented with its camera, timestamp, status message, and
-source. It is not a motion-detection feed until an authorized camera event
-source is integrated.
+recording segment is represented with its optional `recording_id`, camera,
+timestamp, status message, and source. It is not a motion-detection feed until
+an authorized camera event source is integrated.
 
 Recording summaries include an optional `checksum_sha256` calculated from the
 local MP4 bytes. Existing indexes are backfilled when a local file is next
-seen; remote-provider verification and resumable upload policy remain separate
-archive work.
+seen; remote-provider verification is opt-in and resumable transfer policy
+remains separate archive work.
 
 `GET /api/v1/recordings/config` returns read-only media capability state. It
 does not return the rclone remote name, OAuth material, or archive credentials.
@@ -82,8 +85,11 @@ When `archive_verify` is enabled, a completed upload is marked
 `archive_verified: true` only after rclone downloads and hashes the remote
 object with SHA-256; this is intentionally opt-in because it reads the full
 object again.
-`local_retention_days: 0` means no automatic deletion; retention cleanup remains
-an explicit future operations policy.
+`GET /api/v1/recordings/retention-preview` calculates old local segments without
+deleting anything. `local_retention_days: 0` produces an empty preview.
+`auto_delete_enabled` is currently always `false`; when archive is enabled,
+local segments without an archived status are counted as blocked rather than
+eligible.
 
 ## Roles
 

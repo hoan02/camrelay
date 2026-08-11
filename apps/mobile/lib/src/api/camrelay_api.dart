@@ -104,6 +104,10 @@ class CamrelayApi {
       PlaybackTicket.fromJson(
           await _request('POST', '/api/v1/recordings/$id/playback-ticket'));
 
+  Future<ThumbnailTicket> thumbnailTicket(String id) async =>
+      ThumbnailTicket.fromJson(
+          await _request('POST', '/api/v1/recordings/$id/thumbnail-ticket'));
+
   Future<LiveTicket> liveTicket(String id) async => LiveTicket.fromJson(
       await _request('POST', '/api/v1/cameras/$id/live-ticket'));
 
