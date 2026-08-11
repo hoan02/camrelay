@@ -32,19 +32,24 @@ Implemented in the current migration checkpoint:
     POST   /api/v1/providers               authenticated provider onboarding
     GET    /api/v1/recordings              authenticated, secret-free summaries
     GET    /api/v1/tunnels                 authenticated, secret-free lifecycle status
+    GET    /api/v1/tokens                  authenticated, secret-free summaries
+    POST   /api/v1/tokens                  authenticated token creation; secret returned once
     POST   /api/v1/cameras/{camera_id}/start
     POST   /api/v1/cameras/{camera_id}/stop
-
-The endpoints below are the target contract and remain pending until their
-storage and authorization behavior is migrated from the legacy handlers:
-
+    GET    /api/v1/cameras/{camera_id}
+    PATCH  /api/v1/cameras/{camera_id}
+    DELETE /api/v1/cameras/{camera_id}
+    GET    /api/v1/providers/{provider_id}
+    PATCH  /api/v1/providers/{provider_id}
+    DELETE /api/v1/providers/{provider_id}
     POST   /api/v1/auth/login
     POST   /api/v1/auth/refresh
     POST   /api/v1/auth/logout
     GET    /api/v1/me
 
-    GET    /api/v1/cameras/{camera_id}
-    PATCH  /api/v1/cameras/{camera_id}
+The endpoints below are the target contract and remain pending until their
+storage and authorization behavior is migrated from the legacy handlers:
+
     GET    /api/v1/cameras/{camera_id}/diagnostics
 
     POST   /api/v1/cameras/{camera_id}/live-ticket
@@ -65,6 +70,13 @@ storage and authorization behavior is migrated from the legacy handlers:
 | viewer | live view, permitted playback and export |
 
 Provider and camera secrets are never returned by GET endpoints. An update payload may contain a replacement secret; an omitted secret means keep the existing value.
+
+Browser sessions use an HttpOnly `camrelay_session` cookie. API clients may send
+the bearer token returned by login or token creation. The refresh endpoint rotates
+session tokens; logout revokes the in-memory session and clears the cookie.
+
+Provider names are immutable after creation because camera records reference the
+provider by name. A provider in use by a camera cannot be deleted.
 
 The current camera POST writes SQLite when database mode is enabled and writes
 legacy JSON otherwise. It returns only a secret-free summary. Camera startup,

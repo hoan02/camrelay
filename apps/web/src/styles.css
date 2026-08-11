@@ -28,3 +28,13 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 600px) { .dialog { padding: 21px; }.form-grid { grid-template-columns: 1fr; }.check-field { grid-column: auto; } }
 @media (max-width: 980px) { .sidebar { width: 216px; }.topbar { padding: 0 28px; }.page-content { padding: 38px 28px 55px; }.metric-grid { grid-template-columns: repeat(2, 1fr); }.dashboard-grid { grid-template-columns: 1fr; } }
 @media (max-width: 700px) { .sidebar { position: fixed; inset: 0 auto 0 0; transform: translateX(-105%); transition: transform .25s ease; box-shadow: var(--cr-shadow); }.sidebar-open { transform: translateX(0); }.scrim { position: fixed; inset: 0; border: 0; background: rgba(0, 0, 0, .4); z-index: 3; }.mobile-menu { display: grid; }.topbar { height: 64px; padding: 0 17px; gap: 14px; }.crumb span, .runtime-pill { display: none; }.page-content { padding: 31px 17px 45px; }.page-heading { align-items: flex-start; flex-direction: column; margin-bottom: 28px; gap: 20px; }.page-heading h1 { font-size: 34px; }.metric-grid { gap: 9px; }.metric-card { min-height: 145px; padding: 15px; }.metric-icon { margin-bottom: 15px; }.topology { gap: 5px; }.node { min-width: 78px; }.node small { font-size: 8px; }.panel { padding: 18px; border-radius: 19px; }.panel-foot { flex-direction: column; }.login-panel { padding: 33px 26px; }.login-intro { margin-top: 55px; }.login-intro h1 { font-size: 37px; }.login-caption { left: 18px; right: 18px; }.login-caption span:last-child { display: none; } }
+/* Camera lifecycle controls */
+.camera-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.camera-actions .secondary-button { min-height: 34px; padding: 0 11px; font-size: 10px; }
+.camera-status { width: 7px; height: 7px; border-radius: 50%; }
+.camera-status.is-running { background: var(--cr-signal); box-shadow: 0 0 0 4px color-mix(in srgb, var(--cr-signal) 13%, transparent); }
+.camera-live-badge { position: absolute; top: 12px; right: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; color: var(--cr-ink-300); border-radius: 7px; background: color-mix(in srgb, var(--cr-ink-950) 72%, transparent); font: 9px "DM Mono", monospace; text-transform: uppercase; }
+.camera-live-badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--cr-ink-500); }
+.camera-live-badge.is-running { color: var(--cr-signal); }
+.camera-live-badge.is-running i { background: var(--cr-signal); box-shadow: 0 0 10px var(--cr-signal); }
+.provider-remove { align-self: start; }

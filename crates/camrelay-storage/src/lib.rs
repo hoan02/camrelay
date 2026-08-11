@@ -177,6 +177,15 @@ impl Storage {
         Ok(hash.is_some_and(|encoded| verify_password(password, &encoded)))
     }
 
+    pub async fn user_role(&self, username: &str) -> Result<Option<String>, StorageError> {
+        Ok(
+            sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE username = ?")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
     pub async fn import_legacy(
         &self,
         snapshot: &LegacySnapshot,
@@ -361,6 +370,17 @@ impl Storage {
             .find(|provider| provider.name == name))
     }
 
+    pub async fn find_provider_config_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredProviderConfig>, StorageError> {
+        Ok(self
+            .list_provider_configs()
+            .await?
+            .into_iter()
+            .find(|provider| provider.id == id))
+    }
+
     pub async fn upsert_camera(&self, camera: &LegacyCamera) -> Result<(), StorageError> {
         let username = self.encrypt_secret(&camera.username)?;
         let password = self.encrypt_secret(&camera.password)?;
@@ -403,6 +423,72 @@ impl Storage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn update_provider(&self, provider: &LegacyBrand) -> Result<bool, StorageError> {
+        let app_username = self.encrypt_secret(&provider.app_username)?;
+        let app_userkey = self.encrypt_secret(&provider.app_userkey)?;
+        let result = sqlx::query(
+            "UPDATE providers SET name = ?, main_server = ?, app_username = ?, app_userkey = ? WHERE id = ?",
+        )
+        .bind(&provider.name)
+        .bind(&provider.main_server)
+        .bind(app_username)
+        .bind(app_userkey)
+        .bind(&provider.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_provider(&self, id: &str) -> Result<bool, StorageError> {
+        let result = sqlx::query("DELETE FROM providers WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_api_tokens(&self) -> Result<Vec<StoredApiToken>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id, name, token, expires_at, enabled FROM api_tokens ORDER BY name, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(StoredApiToken {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    token: self.decrypt_secret(&row.try_get::<String, _>("token")?)?,
+                    expires_at: row.try_get("expires_at")?,
+                    enabled: row.try_get::<i64, _>("enabled")? != 0,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_api_token(&self, token: &LegacyToken) -> Result<(), StorageError> {
+        let token_value = self.encrypt_secret(&token.token)?;
+        sqlx::query(
+            "INSERT INTO api_tokens (id, name, token, expires_at, enabled) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, token = excluded.token, expires_at = excluded.expires_at, enabled = excluded.enabled",
+        )
+        .bind(&token.id)
+        .bind(&token.name)
+        .bind(token_value)
+        .bind(&token.expires_at)
+        .bind(i64::from(token.enabled as u8))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_api_token(&self, id: &str) -> Result<bool, StorageError> {
+        let result = sqlx::query("DELETE FROM api_tokens WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub fn load_legacy_snapshot(root: impl AsRef<Path>) -> Result<LegacySnapshot, StorageError> {
@@ -454,6 +540,15 @@ pub struct StoredProviderConfig {
     pub main_server: String,
     pub app_username: String,
     pub app_userkey: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredApiToken {
+    pub id: String,
+    pub name: String,
+    pub token: String,
+    pub expires_at: Option<String>,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -565,6 +660,16 @@ mod tests {
             .upsert_provider(&snapshot.brands[0])
             .await
             .expect("provider upsert");
+        storage
+            .upsert_api_token(&LegacyToken {
+                id: "token-1".to_string(),
+                name: "Frigate".to_string(),
+                token: "camrelay-secret-token".to_string(),
+                expires_at: None,
+                enabled: true,
+            })
+            .await
+            .expect("token upsert");
         assert_eq!(first.users, 1);
         assert_eq!(second.users, 0);
         assert_eq!(storage.camera_count().await.expect("camera count"), 1);
@@ -578,6 +683,10 @@ mod tests {
             .await
             .expect("provider secrets should decrypt");
         assert_eq!(providers[0].app_userkey, "app-key");
+        assert_eq!(
+            storage.list_api_tokens().await.expect("token decrypt")[0].token,
+            "camrelay-secret-token"
+        );
         assert!(storage
             .verify_user("admin", "change-me")
             .await

@@ -81,6 +81,14 @@ pub struct ProviderSummary {
     pub main_server: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ApiTokenSummary {
+    pub id: String,
+    pub name: String,
+    pub expires_at: Option<String>,
+    pub enabled: bool,
+}
+
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
         Self { items, next_cursor }

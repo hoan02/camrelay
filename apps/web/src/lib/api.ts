@@ -52,6 +52,12 @@ export type ProviderInput = {
 
 export type Tunnel = { id: string; status: string };
 
+export type CurrentUser = {
+  username: string;
+  role: string;
+  auth_type: "session" | "token";
+};
+
 export type ApiErrorBody = {
   code?: string;
   message?: string;
@@ -86,17 +92,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ token: string }>("/api/login", {
+    request<{ token: string }>("/api/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
-  logout: () => request<void>("/api/logout", { method: "POST" }),
+  refresh: () => request<{ token: string }>("/api/v1/auth/refresh", { method: "POST" }),
+  logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
+  me: () => request<CurrentUser>("/api/v1/me"),
   cameras: () => request<Camera[]>("/api/v1/cameras"),
   createCamera: (input: CameraInput) => request<Camera>("/api/v1/cameras", { method: "POST", body: JSON.stringify(input) }),
+  updateCamera: (id: string, input: Partial<CameraInput>) => request<Camera>(`/api/v1/cameras/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteCamera: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: "DELETE" }),
   health: () => request<Health>("/api/v1/health"),
   recordings: () => request<Recording[]>("/api/v1/recordings"),
   providers: () => request<Provider[]>("/api/v1/providers"),
   createProvider: (input: ProviderInput) => request<Provider>("/api/v1/providers", { method: "POST", body: JSON.stringify(input) }),
+  updateProvider: (id: string, input: Partial<ProviderInput>) => request<Provider>(`/api/v1/providers/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteProvider: (id: string) => request<void>(`/api/v1/providers/${id}`, { method: "DELETE" }),
   tunnels: () => request<Tunnel[]>("/api/v1/tunnels"),
   startCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/start`, { method: "POST" }),
   stopCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/stop`, { method: "POST" }),
