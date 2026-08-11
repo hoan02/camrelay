@@ -60,6 +60,16 @@ export type RetentionPreview = {
   eligible_bytes: number;
   blocked_unarchived_count: number;
   oldest_eligible_at: string | null;
+  eligible_recording_ids: string[];
+};
+
+export type RetentionCleanupResult = {
+  requested_count: number;
+  deleted_count: number;
+  deleted_bytes: number;
+  skipped_count: number;
+  deleted_recording_ids: string[];
+  skipped_recording_ids: string[];
 };
 
 export type PlaybackTicket = { url: string; expires_in_seconds: number };
@@ -167,6 +177,7 @@ export const api = {
   health: () => request<Health>("/api/v1/health"),
   recordingConfig: () => request<RecordingConfig>("/api/v1/recordings/config"),
   retentionPreview: () => request<RetentionPreview>("/api/v1/recordings/retention-preview"),
+  cleanupRetention: (recording_ids: string[]) => request<RetentionCleanupResult>("/api/v1/recordings/retention-cleanup", { method: "POST", body: JSON.stringify({ confirm: true, recording_ids }) }),
   recordings: (filters: { camera_id?: string; status?: string } = {}) => {
     const params = new URLSearchParams();
     if (filters.camera_id) params.set("camera_id", filters.camera_id);

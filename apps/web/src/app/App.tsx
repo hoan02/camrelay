@@ -335,7 +335,21 @@ function Settings() {
   const { theme, setTheme } = useTheme();
   const { data: media, isLoading: mediaLoading, isError: mediaError } = useQuery({ queryKey: ["recording-config"], queryFn: api.recordingConfig });
   const { data: retention } = useQuery({ queryKey: ["retention-preview"], queryFn: api.retentionPreview });
+  const queryClient = useQueryClient();
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: Boolean(window.localStorage.getItem("camrelay_access_token")), retry: false, staleTime: 60_000 });
+  const cleanup = useMutation({
+    mutationFn: () => api.cleanupRetention(retention?.eligible_recording_ids ?? []),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["retention-preview"] });
+      void queryClient.invalidateQueries({ queryKey: ["recordings"] });
+    },
+  });
+  const canCleanup = me?.role === "owner" || me?.role === "admin";
   const stateLabel = (enabled: boolean | undefined) => enabled === undefined ? "—" : enabled ? t("settings.media.ready") : t("settings.media.off");
+  const confirmCleanup = () => {
+    if (!retention?.eligible_recording_ids.length || !window.confirm(t("settings.media.cleanupConfirm"))) return;
+    cleanup.mutate();
+  };
 
   return (
     <>
@@ -364,6 +378,9 @@ function Settings() {
             <div><span>{t("settings.media.retentionPreview")}</span><strong>{retention ? (retention.eligible_count === 0 ? t("settings.media.noneEligible") : `${retention.eligible_count} · ${formatBytes(retention.eligible_bytes)}`) : "—"}</strong></div>
             <div><span>{t("settings.media.checksum")}</span><strong>{media.checksum_algorithm.toUpperCase()}</strong></div>
           </div>}
+          {canCleanup && retention?.eligible_count ? <div className="setting-action-row"><div><strong>{t("settings.media.cleanupTitle")}</strong><span>{t("settings.media.cleanupDescription")}</span></div><button className="secondary-button compact" onClick={confirmCleanup} disabled={cleanup.isPending}>{cleanup.isPending ? t("settings.media.cleanupRunning") : t("settings.media.cleanup")}</button></div> : null}
+          {cleanup.error && <p className="form-error">{cleanup.error instanceof ApiError ? cleanup.error.message : t("settings.media.cleanupFailed")}</p>}
+          {cleanup.data && <p className="setting-status">{t("settings.media.cleanupResult").replace("{count}", String(cleanup.data.deleted_count))}</p>}
         </section>
         <section className="panel setting-card security-setting">
           <div className="setting-heading"><span className="setting-icon"><Icon name="settings" /></span><div><h2>{t("settings.security.title")}</h2><p>{t("settings.security.description")}</p></div></div><span className="security-mark"><i /> HttpOnly session</span>

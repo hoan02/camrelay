@@ -34,6 +34,7 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/recordings              authenticated summaries; optional camera_id/status/limit filters
     GET    /api/v1/recordings/config       authenticated recording/archive capability state
     GET    /api/v1/recordings/retention-preview authenticated read-only retention calculation
+    POST   /api/v1/recordings/retention-cleanup owner/admin only; explicit confirmation and candidate IDs required
     GET    /api/v1/recordings/{recording_id} authenticated, secret-free detail
     POST   /api/v1/recordings/{recording_id}/playback-ticket
     POST   /api/v1/recordings/{recording_id}/thumbnail-ticket
@@ -90,6 +91,13 @@ deleting anything. `local_retention_days: 0` produces an empty preview.
 `auto_delete_enabled` is currently always `false`; when archive is enabled,
 local segments without an archived status are counted as blocked rather than
 eligible.
+The preview also returns the candidate recording IDs used by the console. An
+owner or admin may POST those IDs to `/api/v1/recordings/retention-cleanup`
+with `{ "confirm": true, "recording_ids": [...] }`. The server performs a
+fresh eligibility scan, deletes only local files under the configured
+recordings directory, removes an adjacent generated thumbnail, and retains an
+index tombstone. Cloud objects are never deleted; missing, changed, or unsafe
+paths are reported as skipped.
 
 ## Roles
 

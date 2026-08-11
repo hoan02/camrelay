@@ -2161,6 +2161,62 @@ async fn get_v1_retention_preview(State(state): State<AppState>) -> impl IntoRes
     Json(state.recording_manager.retention_preview())
 }
 
+#[derive(Deserialize)]
+struct RetentionCleanupRequest {
+    confirm: bool,
+    recording_ids: Vec<String>,
+}
+
+async fn post_v1_retention_cleanup(
+    State(state): State<AppState>,
+    principal: Option<Extension<AuthPrincipal>>,
+    Json(body): Json<RetentionCleanupRequest>,
+) -> impl IntoResponse {
+    if !principal
+        .as_ref()
+        .is_some_and(|principal| is_admin_role(&principal.role))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "retention.admin_required",
+                "message": "Only an owner or admin can remove retained local recordings."
+            })),
+        )
+            .into_response();
+    }
+    if !body.confirm {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "code": "retention.confirmation_required",
+                "message": "Explicit confirmation is required before local files are removed."
+            })),
+        )
+            .into_response();
+    }
+    if body.recording_ids.is_empty() || body.recording_ids.len() > 500 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "code": "retention.invalid_selection",
+                "message": "Select between 1 and 500 retention candidates."
+            })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(
+            state
+                .recording_manager
+                .cleanup_retention(&body.recording_ids)
+                .await,
+        ),
+    )
+        .into_response()
+}
+
 async fn archive_recording_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2693,6 +2749,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/recordings/retention-preview",
             get(get_v1_retention_preview),
+        )
+        .route(
+            "/recordings/retention-cleanup",
+            post(post_v1_retention_cleanup),
         )
         .route("/events", get(get_v1_events))
         .route("/recordings/:id", get(get_v1_recording))

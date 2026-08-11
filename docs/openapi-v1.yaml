@@ -331,6 +331,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RetentionPreview'
+  /api/v1/recordings/retention-cleanup:
+    post:
+      summary: Remove explicitly confirmed local retention candidates
+      description: Owner/admin operation. The server rechecks eligibility, deletes only local files under the configured recordings directory, never deletes cloud objects, and retains index tombstones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionCleanupRequest'
+      responses:
+        '200':
+          description: Cleanup result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionCleanupResult'
+        '400':
+          description: Confirmation or selection is invalid
+        '403':
+          description: Owner/admin role required
   /api/v1/recordings/{recording_id}:
     parameters:
       - name: recording_id
@@ -648,7 +669,7 @@ components:
         checksum_algorithm: { type: string, enum: [sha256] }
     RetentionPreview:
       type: object
-      required: [configured_days, auto_delete_enabled, eligible_count, eligible_bytes, blocked_unarchived_count, oldest_eligible_at]
+      required: [configured_days, auto_delete_enabled, eligible_count, eligible_bytes, blocked_unarchived_count, oldest_eligible_at, eligible_recording_ids]
       properties:
         configured_days: { type: integer, minimum: 0 }
         auto_delete_enabled: { type: boolean, enum: [false] }
@@ -656,6 +677,33 @@ components:
         eligible_bytes: { type: integer, format: int64, minimum: 0 }
         blocked_unarchived_count: { type: integer, minimum: 0 }
         oldest_eligible_at: { type: string, nullable: true, format: date-time }
+        eligible_recording_ids:
+          type: array
+          items: { type: string }
+    RetentionCleanupRequest:
+      type: object
+      required: [confirm, recording_ids]
+      properties:
+        confirm: { type: boolean, enum: [true] }
+        recording_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { type: string }
+    RetentionCleanupResult:
+      type: object
+      required: [requested_count, deleted_count, deleted_bytes, skipped_count, deleted_recording_ids, skipped_recording_ids]
+      properties:
+        requested_count: { type: integer, minimum: 0 }
+        deleted_count: { type: integer, minimum: 0 }
+        deleted_bytes: { type: integer, format: int64, minimum: 0 }
+        skipped_count: { type: integer, minimum: 0 }
+        deleted_recording_ids:
+          type: array
+          items: { type: string }
+        skipped_recording_ids:
+          type: array
+          items: { type: string }
     EventSummary:
       type: object
       required: [id, kind, recording_id, camera_id, camera_name, occurred_at, severity, message, source]

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -21,7 +21,7 @@ use crate::{
     rtsp_proxy::RtspProxyManager,
     tunnel::{TunnelManager, TunnelStatus},
 };
-use camrelay_contract::RetentionPreview;
+use camrelay_contract::{RetentionCleanupResult, RetentionPreview};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Recording {
@@ -49,6 +49,12 @@ pub struct RecordingManager {
     proxy: RtspProxyManager,
     records: Arc<Mutex<Vec<Recording>>>,
     processes: Arc<Mutex<HashMap<String, Child>>>,
+}
+
+#[derive(Default)]
+struct RetentionScan {
+    eligible: Vec<Recording>,
+    blocked_unarchived_count: usize,
 }
 
 impl RecordingManager {
@@ -119,15 +125,120 @@ impl RecordingManager {
                 eligible_bytes: 0,
                 blocked_unarchived_count: 0,
                 oldest_eligible_at: None,
+                eligible_recording_ids: Vec::new(),
             };
         }
 
-        let cutoff = Utc::now() - chrono::Duration::days(i64::from(configured_days));
-        let mut eligible_count = 0;
-        let mut eligible_bytes: u64 = 0;
-        let mut blocked_unarchived_count = 0;
+        let scan = self.retention_scan();
         let mut oldest_eligible: Option<(DateTime<Utc>, String)> = None;
 
+        for record in &scan.eligible {
+            let Some(ended_at) = record
+                .ended_at
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&Utc))
+            else {
+                continue;
+            };
+            if oldest_eligible
+                .as_ref()
+                .map(|(oldest, _)| ended_at < *oldest)
+                .unwrap_or(true)
+            {
+                oldest_eligible = Some((ended_at, record.ended_at.clone().unwrap_or_default()));
+            }
+        }
+
+        RetentionPreview {
+            configured_days,
+            auto_delete_enabled: false,
+            eligible_count: scan.eligible.len(),
+            eligible_bytes: scan
+                .eligible
+                .iter()
+                .fold(0_u64, |total, record| total.saturating_add(record.bytes)),
+            blocked_unarchived_count: scan.blocked_unarchived_count,
+            oldest_eligible_at: oldest_eligible.map(|(_, value)| value),
+            eligible_recording_ids: scan.eligible.into_iter().map(|record| record.id).collect(),
+        }
+    }
+
+    /// Deletes only the explicitly supplied candidates from a fresh retention
+    /// scan. It never runs automatically and keeps the index entry as a
+    /// historical tombstone so audit/activity views remain meaningful.
+    pub async fn cleanup_retention(&self, ids: &[String]) -> RetentionCleanupResult {
+        let mut requested_ids = Vec::new();
+        let mut seen = HashSet::new();
+        for id in ids {
+            if !id.trim().is_empty() && seen.insert(id.clone()) {
+                requested_ids.push(id.clone());
+            }
+        }
+
+        let scan = self.retention_scan();
+        let eligible = scan
+            .eligible
+            .into_iter()
+            .map(|record| (record.id.clone(), record))
+            .collect::<HashMap<_, _>>();
+        let mut result = RetentionCleanupResult {
+            requested_count: requested_ids.len(),
+            deleted_count: 0,
+            deleted_bytes: 0,
+            skipped_count: 0,
+            deleted_recording_ids: Vec::new(),
+            skipped_recording_ids: Vec::new(),
+        };
+        let mut changed = false;
+
+        for id in requested_ids {
+            let Some(record) = eligible.get(&id) else {
+                result.skipped_count += 1;
+                result.skipped_recording_ids.push(id);
+                continue;
+            };
+            let path = PathBuf::from(&record.local_path);
+            if tokio::fs::remove_file(&path).await.is_err() {
+                result.skipped_count += 1;
+                result.skipped_recording_ids.push(id);
+                continue;
+            }
+            let thumbnail = path.with_extension("jpg");
+            let _ = tokio::fs::remove_file(thumbnail).await;
+            if let Some(current) = self
+                .records
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|current| current.id == id)
+            {
+                current.status = if current.status == "archived" {
+                    "archived".to_string()
+                } else {
+                    "deleted".to_string()
+                };
+                current.error = None;
+                changed = true;
+            }
+            result.deleted_count += 1;
+            result.deleted_bytes = result.deleted_bytes.saturating_add(record.bytes);
+            result.deleted_recording_ids.push(id);
+        }
+
+        if changed {
+            self.persist();
+        }
+        result
+    }
+
+    fn retention_scan(&self) -> RetentionScan {
+        let configured_days = self.config.local_retention_days;
+        if configured_days == 0 {
+            return RetentionScan::default();
+        }
+        let cutoff = Utc::now() - chrono::Duration::days(i64::from(configured_days));
+        let mut scan = RetentionScan::default();
         for record in self.list() {
             if !matches!(record.status.as_str(), "local" | "archived") {
                 continue;
@@ -140,32 +251,26 @@ impl RecordingManager {
             else {
                 continue;
             };
-            if ended_at >= cutoff || !Path::new(&record.local_path).is_file() {
+            if ended_at >= cutoff || !self.is_safe_local_recording(&record) {
                 continue;
             }
             if self.config.archive_enabled && record.status != "archived" {
-                blocked_unarchived_count += 1;
+                scan.blocked_unarchived_count += 1;
                 continue;
             }
-            eligible_count += 1;
-            eligible_bytes = eligible_bytes.saturating_add(record.bytes);
-            if oldest_eligible
-                .as_ref()
-                .map(|(oldest, _)| ended_at < *oldest)
-                .unwrap_or(true)
-            {
-                oldest_eligible = Some((ended_at, record.ended_at.unwrap_or_default()));
-            }
+            scan.eligible.push(record);
         }
+        scan
+    }
 
-        RetentionPreview {
-            configured_days,
-            auto_delete_enabled: false,
-            eligible_count,
-            eligible_bytes,
-            blocked_unarchived_count,
-            oldest_eligible_at: oldest_eligible.map(|(_, value)| value),
-        }
+    fn is_safe_local_recording(&self, record: &Recording) -> bool {
+        let Ok(root) = fs::canonicalize(&self.config.recordings_dir) else {
+            return false;
+        };
+        let Ok(path) = fs::canonicalize(&record.local_path) else {
+            return false;
+        };
+        path.starts_with(root) && path.is_file()
     }
 
     /// Generates a small local JPEG thumbnail on demand. Remote-only archive
@@ -776,5 +881,84 @@ mod tests {
         assert!(!preview.auto_delete_enabled);
         assert_eq!(preview.eligible_count, 0);
         assert_eq!(preview.eligible_bytes, 0);
+        assert!(preview.eligible_recording_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retention_cleanup_requires_safe_local_paths_and_keeps_tombstones() {
+        let root = std::env::temp_dir().join(format!("camrelay-retention-{}", Uuid::new_v4()));
+        let camera_dir = root.join("cam-1");
+        fs::create_dir_all(&camera_dir).expect("recording directory should be writable");
+        let inside = camera_dir.join("inside.mp4");
+        let outside = root.with_file_name(format!("camrelay-outside-{}.mp4", Uuid::new_v4()));
+        fs::write(&inside, b"inside").expect("inside fixture should be writable");
+        fs::write(&outside, b"outside").expect("outside fixture should be writable");
+        let old = (Utc::now() - chrono::Duration::days(3)).to_rfc3339();
+        let records = vec![
+            Recording {
+                id: "inside".to_string(),
+                camera_id: "cam-1".to_string(),
+                camera_name: "Test".to_string(),
+                started_at: old.clone(),
+                ended_at: Some(old.clone()),
+                kind: "continuous".to_string(),
+                local_path: inside.to_string_lossy().to_string(),
+                archive_path: None,
+                drive_file_id: None,
+                bytes: 6,
+                status: "local".to_string(),
+                error: None,
+                checksum_sha256: None,
+                archive_verified: false,
+            },
+            Recording {
+                id: "outside".to_string(),
+                camera_id: "cam-1".to_string(),
+                camera_name: "Test".to_string(),
+                started_at: old.clone(),
+                ended_at: Some(old),
+                kind: "continuous".to_string(),
+                local_path: outside.to_string_lossy().to_string(),
+                archive_path: None,
+                drive_file_id: None,
+                bytes: 7,
+                status: "local".to_string(),
+                error: None,
+                checksum_sha256: None,
+                archive_verified: false,
+            },
+        ];
+        let index = root.join("recordings.json");
+        fs::write(
+            &index,
+            serde_json::to_string(&records).expect("fixtures should serialize"),
+        )
+        .expect("recording index should be writable");
+        let config = AppConfig {
+            recordings_dir: root.to_string_lossy().to_string(),
+            recordings_index: index.to_string_lossy().to_string(),
+            local_retention_days: 1,
+            ..AppConfig::default()
+        };
+        let manager = RecordingManager::new(config, RtspProxyManager::new());
+
+        let preview = manager.retention_preview();
+        assert_eq!(preview.eligible_recording_ids, vec!["inside"]);
+        assert!(inside.is_file());
+
+        let result = manager
+            .cleanup_retention(&["inside".to_string(), "outside".to_string()])
+            .await;
+        assert_eq!(result.deleted_count, 1);
+        assert_eq!(result.skipped_count, 1);
+        assert!(!inside.is_file());
+        assert!(outside.is_file());
+        assert_eq!(
+            manager.get("inside").expect("tombstone exists").status,
+            "deleted"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&outside);
     }
 }

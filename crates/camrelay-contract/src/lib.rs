@@ -84,6 +84,17 @@ pub struct RetentionPreview {
     pub eligible_bytes: u64,
     pub blocked_unarchived_count: usize,
     pub oldest_eligible_at: Option<String>,
+    pub eligible_recording_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RetentionCleanupResult {
+    pub requested_count: usize,
+    pub deleted_count: usize,
+    pub deleted_bytes: u64,
+    pub skipped_count: usize,
+    pub deleted_recording_ids: Vec<String>,
+    pub skipped_recording_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
