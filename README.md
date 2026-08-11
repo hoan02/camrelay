@@ -378,7 +378,7 @@ Next, in order:
 2. Add a WebRTC media gateway (MediaMTX, go2rtc, or an in-process alternative) behind the existing credential-free local proxy; HLS is already available for web/mobile and Frigate/FFmpeg integrations.
 3. Add recording retention, upload checksums/resume, thumbnails, and event markers.
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
-5. Verify the Flutter mobile client on Android/iOS and add a WebRTC adapter when the gateway contract is finalized; the source already includes ticket-backed HLS live and recorded playback.
+5. Validate ticket-backed playback on an authorized Android device and complete the iOS runner/device build on macOS; then add a WebRTC adapter when the gateway contract is finalized.
 
 See [the media gateway design](docs/media-gateway.md) and [the authorized device validation matrix](docs/device-validation-matrix.md) for the next-phase contracts and evidence requirements.
 

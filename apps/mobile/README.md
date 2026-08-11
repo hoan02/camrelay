@@ -30,6 +30,7 @@ Install the Flutter SDK, then from this directory:
 flutter pub get
 flutter analyze
 flutter test
+flutter build apk --debug
 flutter run --dart-define=CAMRELAY_API_BASE_URL=https://camrelay.example.com
 ```
 
@@ -37,12 +38,19 @@ For a local appliance on the same LAN, use its HTTPS reverse-proxy address.
 Avoid shipping an HTTP endpoint or putting an access token in a URL, log, or
 deep link.
 
+The Android runner is included in this repository. The debug APK is written to
+`build/app/outputs/flutter-apk/app-debug.apk`; install it on an authorized USB
+device with `adb install -r build/app/outputs/flutter-apk/app-debug.apk` after
+enabling USB debugging. iOS project generation and device builds require macOS
+and Xcode.
+
 ## Current limitations
 
-- HLS playback is wired through `video_player`; actual Android/iOS support
-  still needs verification with a running Camrelay appliance;
+- the Android source/runner and debug APK build are verified locally, but live
+  HLS playback still needs an authorized Android device and running appliance;
+- an iOS runner and device build are not verified on Windows;
 - WebRTC remains a future adapter because the backend currently issues HLS
   tickets only;
-- automatic refresh and media playback still need Flutter SDK/device verification on the development machine.
+- playback behavior against a real camera still needs device validation;
 - the activity feed currently represents persisted recording segments; motion events
   need a camera/provider event source and are not claimed by this client yet.

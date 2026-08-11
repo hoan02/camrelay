@@ -78,11 +78,13 @@ class RecordingSummary {
   final String status;
   final bool archiveAvailable;
 
-  factory RecordingSummary.fromJson(Map<String, dynamic> json) => RecordingSummary(
+  factory RecordingSummary.fromJson(Map<String, dynamic> json) =>
+      RecordingSummary(
         id: json['id'] as String? ?? '',
         cameraId: json['camera_id'] as String? ?? '',
         cameraName: json['camera_name'] as String? ?? '',
-        startedAt: DateTime.tryParse(json['started_at'] as String? ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        startedAt: DateTime.tryParse(json['started_at'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0),
         endedAt: DateTime.tryParse(json['ended_at'] as String? ?? ''),
         kind: json['kind'] as String? ?? 'segment',
         bytes: (json['bytes'] as num?)?.toInt() ?? 0,
@@ -117,7 +119,8 @@ class EventSummary {
         kind: json['kind'] as String? ?? 'activity',
         cameraId: json['camera_id'] as String? ?? '',
         cameraName: json['camera_name'] as String? ?? '',
-        occurredAt: DateTime.tryParse(json['occurred_at'] as String? ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        occurredAt: DateTime.tryParse(json['occurred_at'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0),
         severity: json['severity'] as String? ?? 'info',
         message: json['message'] as String? ?? '',
         source: json['source'] as String? ?? 'unknown',
@@ -137,7 +140,10 @@ class PlaybackTicket {
 }
 
 class LiveTicket {
-  const LiveTicket({required this.protocol, required this.url, required this.expiresInSeconds});
+  const LiveTicket(
+      {required this.protocol,
+      required this.url,
+      required this.expiresInSeconds});
 
   final String protocol;
   final String url;

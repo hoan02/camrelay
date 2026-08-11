@@ -54,7 +54,8 @@ class _TicketVideoScreenState extends State<TicketVideoScreen> {
 
     try {
       final ticket = await widget.loadTicket();
-      final controller = VideoPlayerController.networkUrl(Uri.parse(ticket.url));
+      final controller =
+          VideoPlayerController.networkUrl(Uri.parse(ticket.url));
       await controller.initialize();
       if (!mounted) {
         await controller.dispose();
@@ -101,8 +102,12 @@ class _TicketVideoScreenState extends State<TicketVideoScreen> {
           : _error != null
               ? _ErrorView(message: _error!, onRetry: () => unawaited(_load()))
               : controller == null
-                  ? const _ErrorView(message: 'The media player is unavailable.')
-                  : _PlayerBody(controller: controller, expiresInSeconds: _expiresInSeconds),
+                  ? _ErrorView(
+                      message: 'The media player is unavailable.',
+                      onRetry: () => unawaited(_load()))
+                  : _PlayerBody(
+                      controller: controller,
+                      expiresInSeconds: _expiresInSeconds),
     );
   }
 }
@@ -115,12 +120,15 @@ class _PlayerBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final aspectRatio = controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio;
+    final aspectRatio = controller.value.aspectRatio == 0
+        ? 16 / 9
+        : controller.value.aspectRatio;
     return Column(
       children: [
         Expanded(
           child: Center(
-            child: AspectRatio(aspectRatio: aspectRatio, child: VideoPlayer(controller)),
+            child: AspectRatio(
+                aspectRatio: aspectRatio, child: VideoPlayer(controller)),
           ),
         ),
         ValueListenableBuilder<VideoPlayerValue>(
@@ -134,7 +142,8 @@ class _PlayerBody extends StatelessWidget {
                 tooltip: value.isPlaying ? 'Pause' : 'Play',
               ),
               if (expiresInSeconds != null)
-                Text('Ticket valid for ${expiresInSeconds}s', style: Theme.of(context).textTheme.bodySmall),
+                Text('Ticket valid for ${expiresInSeconds}s',
+                    style: Theme.of(context).textTheme.bodySmall),
             ],
           ),
         ),
@@ -162,7 +171,10 @@ class _ErrorView extends StatelessWidget {
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            FilledButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('Try again')),
+            FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Try again')),
           ],
         ),
       ),

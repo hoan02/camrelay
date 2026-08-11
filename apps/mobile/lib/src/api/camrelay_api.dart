@@ -33,9 +33,12 @@ class CamrelayApi {
   static String _normalizeBaseUrl(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) {
-      throw ArgumentError.value(value, 'baseUrl', 'Camrelay API base URL is required');
+      throw ArgumentError.value(
+          value, 'baseUrl', 'Camrelay API base URL is required');
     }
-    return trimmed.endsWith('/') ? trimmed.substring(0, trimmed.length - 1) : trimmed;
+    return trimmed.endsWith('/')
+        ? trimmed.substring(0, trimmed.length - 1)
+        : trimmed;
   }
 
   Future<void> login(String username, String password) async {
@@ -50,7 +53,8 @@ class CamrelayApi {
     }
     final token = payload['token'] as String?;
     if (token == null || token.isEmpty) {
-      throw const CamrelayApiException(502, 'Login response did not contain an access token.');
+      throw const CamrelayApiException(
+          502, 'Login response did not contain an access token.');
     }
     await _secureStorage.write(key: _tokenKey, value: token);
   }
@@ -63,7 +67,8 @@ class CamrelayApi {
     }
   }
 
-  Future<Principal> me() async => Principal.fromJson(await _request('GET', '/api/v1/me'));
+  Future<Principal> me() async =>
+      Principal.fromJson(await _request('GET', '/api/v1/me'));
 
   Future<List<CameraSummary>> cameras() async {
     final payload = await _request('GET', '/api/v1/cameras');
@@ -77,7 +82,9 @@ class CamrelayApi {
 
   Future<List<RecordingSummary>> recordings() async {
     final payload = await _request('GET', '/api/v1/recordings');
-    return _list(payload).map(RecordingSummary.fromJson).toList(growable: false);
+    return _list(payload)
+        .map(RecordingSummary.fromJson)
+        .toList(growable: false);
   }
 
   Future<List<EventSummary>> events() async {
@@ -94,14 +101,16 @@ class CamrelayApi {
   }
 
   Future<PlaybackTicket> playbackTicket(String id) async =>
-      PlaybackTicket.fromJson(await _request('POST', '/api/v1/recordings/$id/playback-ticket'));
+      PlaybackTicket.fromJson(
+          await _request('POST', '/api/v1/recordings/$id/playback-ticket'));
 
-  Future<LiveTicket> liveTicket(String id) async =>
-      LiveTicket.fromJson(await _request('POST', '/api/v1/cameras/$id/live-ticket'));
+  Future<LiveTicket> liveTicket(String id) async => LiveTicket.fromJson(
+      await _request('POST', '/api/v1/cameras/$id/live-ticket'));
 
   String resolveUrl(String path) => _uri(path).toString();
 
-  Future<Map<String, dynamic>> _request(String method, String path, {bool allowRefresh = true}) async {
+  Future<Map<String, dynamic>> _request(String method, String path,
+      {bool allowRefresh = true}) async {
     final token = await _secureStorage.read(key: _tokenKey);
     final headers = <String, String>{'accept': 'application/json'};
     if (token != null && token.isNotEmpty) {
@@ -109,7 +118,11 @@ class CamrelayApi {
     }
 
     final response = await _send(method, path, headers);
-    if (response.statusCode == 401 && allowRefresh && token != null && token.isNotEmpty && await _refreshOnce()) {
+    if (response.statusCode == 401 &&
+        allowRefresh &&
+        token != null &&
+        token.isNotEmpty &&
+        await _refreshOnce()) {
       return _request(method, path, allowRefresh: false);
     }
     final payload = _decode(response);
@@ -119,10 +132,13 @@ class CamrelayApi {
     return payload;
   }
 
-  Future<http.Response> _send(String method, String path, Map<String, String> headers) => switch (method) {
+  Future<http.Response> _send(
+          String method, String path, Map<String, String> headers) =>
+      switch (method) {
         'POST' => _client.post(_uri(path), headers: headers),
         'GET' => _client.get(_uri(path), headers: headers),
-        _ => throw ArgumentError.value(method, 'method', 'Unsupported request method'),
+        _ => throw ArgumentError.value(
+            method, 'method', 'Unsupported request method'),
       };
 
   Future<bool> _refreshOnce() async {
@@ -143,7 +159,10 @@ class CamrelayApi {
     try {
       final response = await _client.post(
         _uri('/api/v1/auth/refresh'),
-        headers: {'accept': 'application/json', 'authorization': 'Bearer $token'},
+        headers: {
+          'accept': 'application/json',
+          'authorization': 'Bearer $token'
+        },
       );
       if (response.statusCode < 200 || response.statusCode >= 300) return false;
       final payload = _decode(response);
@@ -161,7 +180,9 @@ class CamrelayApi {
   static Map<String, dynamic> _decode(http.Response response) {
     if (response.body.isEmpty) return <String, dynamic>{};
     final decoded = jsonDecode(response.body);
-    return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{'data': decoded};
+    return decoded is Map<String, dynamic>
+        ? decoded
+        : <String, dynamic>{'data': decoded};
   }
 
   static List<Map<String, dynamic>> _list(Map<String, dynamic> payload) {
@@ -173,5 +194,7 @@ class CamrelayApi {
   }
 
   static String _message(Map<String, dynamic> payload) =>
-      payload['message'] as String? ?? payload['error'] as String? ?? 'Camrelay request failed.';
+      payload['message'] as String? ??
+      payload['error'] as String? ??
+      'Camrelay request failed.';
 }
