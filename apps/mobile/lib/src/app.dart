@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api/camrelay_api.dart';
 import 'api/models.dart';
+import 'media/ticket_video_screen.dart';
 
 class CamrelayApp extends StatefulWidget {
   const CamrelayApp({super.key, required this.api});
@@ -146,6 +147,40 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _openLive(CameraSummary camera) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TicketVideoScreen(
+          title: camera.name,
+          loadTicket: () async {
+            final ticket = await widget.api.liveTicket(camera.id);
+            return MediaTicketData(
+              url: widget.api.resolveUrl(ticket.url),
+              expiresInSeconds: ticket.expiresInSeconds,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openRecording(RecordingSummary recording) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TicketVideoScreen(
+          title: recording.cameraName,
+          loadTicket: () async {
+            final ticket = await widget.api.playbackTicket(recording.id);
+            return MediaTicketData(
+              url: widget.api.resolveUrl(ticket.url),
+              expiresInSeconds: ticket.expiresInSeconds,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -161,7 +196,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (snapshot.hasError) return const _ErrorTile(message: 'Camera API is unavailable.');
             if (!snapshot.hasData) return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()));
             if (snapshot.data!.isEmpty) return const _EmptyTile(message: 'No cameras configured yet.');
-            return Column(children: snapshot.data!.map((camera) => Card(child: ListTile(leading: const Icon(Icons.videocam_outlined), title: Text(camera.name), subtitle: Text('${camera.brand} · ${camera.serial}'), trailing: IconButton(icon: const Icon(Icons.play_arrow), tooltip: 'Start relay', onPressed: () => _toggle(camera)))).toList());
+            return Column(children: snapshot.data!.map((camera) => Card(child: ListTile(leading: const Icon(Icons.videocam_outlined), title: Text(camera.name), subtitle: Text('${camera.brand} · ${camera.serial}'), trailing: Wrap(children: [IconButton(icon: const Icon(Icons.live_tv_outlined), tooltip: 'Watch live', onPressed: () => _openLive(camera)), IconButton(icon: const Icon(Icons.play_arrow), tooltip: 'Start relay', onPressed: () => _toggle(camera))]))).toList());
           }),
           const SizedBox(height: 24),
           Text('Recent recordings', style: Theme.of(context).textTheme.titleLarge),
@@ -170,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (snapshot.hasError) return const _ErrorTile(message: 'Recording API is unavailable.');
             if (!snapshot.hasData) return const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()));
             if (snapshot.data!.isEmpty) return const _EmptyTile(message: 'No recordings yet.');
-            return Column(children: snapshot.data!.take(10).map((recording) => ListTile(title: Text(recording.cameraName), subtitle: Text(recording.startedAt.toLocal().toString()), trailing: Text(recording.status)).toList());
+            return Column(children: snapshot.data!.take(10).map((recording) => ListTile(title: Text(recording.cameraName), subtitle: Text(recording.startedAt.toLocal().toString()), trailing: Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [Text(recording.status), IconButton(icon: const Icon(Icons.play_circle_outline), tooltip: 'Play recording', onPressed: () => _openRecording(recording))]))).toList());
           }),
         ]),
       ),

@@ -47,6 +47,7 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 - User passwords use Argon2id. Provider/device secrets use an encrypted envelope keyed by `CAMRELAY_SECRET_KEY`; the key is never stored in SQLite or the repository. Refresh sessions are server-side and revocable.
 - Web uses secure HttpOnly session cookies. Mobile uses a bearer session token in platform secure storage; automatic refresh rotation remains a client milestone.
 - A live/playback URL is a short-lived bearer ticket scoped to one camera or recording; issuance still requires an authenticated API client.
+- Mobile HLS playback consumes the same ticket URL through `video_player`; the API bearer is never appended to the media URL. WebRTC remains an adapter boundary, not an unimplemented claim in the current transport.
 - SQLite in WAL mode is the default single-appliance database. SQLx migrations are the schema truth.
 - Runtime JSON files are legacy import sources, not the v1 system of record.
 
@@ -61,4 +62,4 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 
 ## Current migration checkpoint
 
-The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and legacy JSON handlers, while SQLite mode owns the v1 camera/provider snapshots, auth sessions, onboarding, CRUD, tunnel startup, recording reconciliation, local HLS, API tokens, RBAC, and readiness contract. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. The React console now has v1 parity for the current management surface; WebRTC, durable motion events, and Flutter SDK verification remain later gates.
+The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and legacy JSON handlers, while SQLite mode owns the v1 camera/provider snapshots, auth sessions, onboarding, CRUD, tunnel startup, recording reconciliation, local HLS, API tokens, RBAC, and readiness contract. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. The React console now has v1 parity for the current management surface; WebRTC, durable motion events, authorized device validation, and Flutter SDK/device verification remain later gates.

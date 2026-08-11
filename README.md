@@ -375,10 +375,10 @@ Completed in the v1 foundation:
 Next, in order:
 
 1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
-2. Add real live-media delivery through a gateway such as MediaMTX or go2rtc, then connect Frigate/FFmpeg with documented examples.
+2. Add a WebRTC media gateway (MediaMTX, go2rtc, or an in-process alternative) behind the existing credential-free local proxy; HLS is already available for web/mobile and Frigate/FFmpeg integrations.
 3. Add recording retention, upload checksums/resume, thumbnails, and event markers.
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
-5. Add the Flutter mobile client against the same OpenAPI contract when the Flutter SDK/toolchain is available.
+5. Verify the Flutter mobile client on Android/iOS and add a WebRTC adapter when the gateway contract is finalized; the source already includes ticket-backed HLS live and recorded playback.
 
 ## Protocol and investigation notes
 
