@@ -6,12 +6,12 @@ The project currently contains a multi-camera manager, a web dashboard, a REST A
 
 ## v1 foundation status
 
-The `v1-foundation` branch is an incremental migration from the known `prototype-v0.1` relay baseline. The existing Rust binary and `static/` console remain the compatibility path while the new boundaries are built:
+The `v1-foundation` branch is an incremental migration from the known `prototype-v0.1` relay baseline. The Rust binary and `static/` console remain the rollback path while the new API-first boundaries are verified:
 
 - Rust is now a Cargo workspace with a transport-independent `camrelay-contract` crate.
 - `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, persistent English/Vietnamese settings, and an API client.
 - `packages/design-tokens` is the first shared visual language seam for the future web and mobile clients.
-- The new console is not served by the Rust binary yet; run it separately during development. The legacy console stays in place until feature parity and migration tests pass.
+- `apps/web` is the feature-parity v1 console for development and can be served by the Rust binary by setting `web_root` to `apps/web/dist`; the legacy console remains available as a rollback path.
 
 ## Overview
 
@@ -54,7 +54,7 @@ flowchart LR
 - Provider probe before a camera can be added; the probe validates provider signaling only.
 - Auto-start for cameras with `auto_start: true`.
 - Brand-specific P2P server and app credentials.
-- JSON files instead of a database.
+- SQLite v1 persistence with encrypted provider/camera secrets, Argon2id user passwords, refresh sessions, RBAC, and idempotent import from legacy JSON files.
 - Direct and relay handshake paths in the Rust implementation, subject to device/cloud support.
 
 ### Not yet promised
@@ -66,9 +66,7 @@ flowchart LR
 - Guaranteed reconnection after every network or device failure.
 - A native Frigate integration.
 - Provider probe success does not guarantee camera, firmware, model, region, or RTSP compatibility.
-- Optional FFmpeg segment recording with a JSON recording index.
-- Optional Google Drive archiving through a local rclone remote.
-- Ticket-protected browser playback with HTTP Range seeking for local files or archived files.
+- Long-term universal device compatibility, automatic discovery, native Frigate integration, and unattended production reliability are not promised yet.
 
 ## Build and run
 
@@ -120,7 +118,7 @@ npm install
 npm run web:dev
 ```
 
-Open `http://127.0.0.1:5173/login`. Vite proxies `/api` to the Rust service on port `8080`. This console is the v1 migration surface; it currently exposes the dashboard and camera workspace foundation while the legacy routes remain the complete operational UI.
+Open `http://127.0.0.1:5173/login`. Vite proxies `/api` to the Rust service on port `8080`. The console covers the v1 dashboard, camera/provider CRUD, lifecycle controls, recording playback/archive actions, API tokens, settings, and technical notes.
 
 To serve the built console from the Rust binary after feature parity checks:
 
@@ -258,7 +256,7 @@ Set archive_remote to the configured remote name and enable archive_enabled. Upl
 
 The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
 
-The SQLite v1 foundation is opt-in for now. Set `database_enabled` to `true` to create the configured database, apply SQLx migrations, and import any legacy JSON files idempotently. Before enabling it when providers or cameras exist, set `CAMRELAY_SECRET_KEY` to a base64-encoded 32-byte key (see `.env.example`). User passwords are Argon2id hashes; provider and camera secrets are encrypted with ChaCha20-Poly1305 and the master key must be backed up separately. In SQLite mode, v1 camera/provider reads, camera onboarding, tunnel startup, auto-start, and recording reconciliation use SQLite; legacy JSON handlers remain available only for rollback until full CRUD parity is complete. The database file is ignored by Git.
+The SQLite v1 foundation is opt-in for now. Set `database_enabled` to `true` to create the configured database, apply SQLx migrations, and import any legacy JSON files idempotently. Before enabling it when providers or cameras exist, set `CAMRELAY_SECRET_KEY` to a base64-encoded 32-byte key (see `.env.example`). User passwords are Argon2id hashes; provider and camera secrets are encrypted with ChaCha20-Poly1305 and the master key must be backed up separately. In SQLite mode, v1 camera/provider reads, camera onboarding, tunnel startup, auto-start, recording reconciliation, auth, and token management use SQLite. Legacy JSON handlers remain available only as a rollback path; the database file is ignored by Git.
 
 For a first test, leave archive_enabled false, enable recording, start one camera, wait for one segment to close, and open /recordings. Then configure rclone and archive the same segment.
 
@@ -352,13 +350,19 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 
 ## Roadmap
 
-1. Add repeatable local tests for configuration, PTCP framing, API authentication, and tunnel lifecycle.
-2. Add explicit health/readiness endpoints and structured logs.
-3. Improve reconnect, timeout, cancellation, and relay-mode controls.
-4. Validate supported device families with authorized test hardware and document results by model/firmware.
-5. Add safer secret handling and optional encrypted or external configuration.
-6. Add deployment examples for Frigate, systemd, containers, and reverse proxies.
-7. Add transactional recording metadata storage, upload checksums, resumable Drive API support, thumbnails, event markers, and retention cleanup after more field testing.
+Completed in the v1 foundation:
+
+- versioned API contract, SQLite persistence, encrypted device/provider secrets, auth sessions, RBAC, token management, readiness, and CRUD;
+- React console routes for dashboard, cameras, providers, recordings, tokens, settings, and technical notes;
+- local recording playback tickets, Range streaming, archive actions, backup/restore scripts, and Compose configuration.
+
+Next, in order:
+
+1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
+2. Add real live-media delivery through a gateway such as MediaMTX or go2rtc, then connect Frigate/FFmpeg with documented examples.
+3. Add recording retention, upload checksums/resume, thumbnails, event markers, and audit history.
+4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
+5. Add the Flutter mobile client against the same OpenAPI contract when the Flutter SDK/toolchain is available.
 
 ## Protocol and investigation notes
 
