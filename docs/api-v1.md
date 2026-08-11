@@ -53,6 +53,7 @@ Implemented in the current migration checkpoint:
     DELETE /api/v1/providers/{provider_id}
     GET    /api/v1/events
     GET    /api/v1/system/health
+    GET    /api/v1/system/stream              authenticated Server-Sent Events telemetry
     POST   /api/v1/auth/login
     POST   /api/v1/auth/refresh
     POST   /api/v1/auth/logout
@@ -60,10 +61,8 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/users                 owner-only, secret-free user summaries
     POST   /api/v1/users                 owner-only user creation
 
-The following transport remains pending until it is implemented and tested
-end to end:
-
-    GET    /api/v1/system/stream
+The live media transport currently exposes ticketed HLS. WebRTC connection
+metadata remains a later media-gateway phase.
 
 ## Roles
 

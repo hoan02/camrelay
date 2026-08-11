@@ -3,13 +3,17 @@ use axum::{
     extract::{Extension, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    convert::Infallible,
     path::Path as FsPath,
     process::Stdio,
     sync::{Arc, Mutex},
@@ -567,6 +571,52 @@ async fn v1_readiness(State(state): State<AppState>) -> impl IntoResponse {
             "checks": checks
         })),
     )
+}
+
+async fn system_stream(
+    State(state): State<AppState>,
+) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
+    let stream = async_stream::stream! {
+        loop {
+            let (storage, storage_ok, camera_count) = match &state.storage {
+                Some(storage) => match storage.health_check().await {
+                    Ok(()) => ("sqlite", true, storage.camera_count().await.unwrap_or_default()),
+                    Err(_) => ("sqlite", false, 0),
+                },
+                None => ("legacy_json", true, load_cameras().len() as i64),
+            };
+            let camera_ids: Vec<String> = match &state.storage {
+                Some(storage) => storage
+                    .list_cameras()
+                    .await
+                    .map(|cameras| cameras.into_iter().map(|camera| camera.id).collect())
+                    .unwrap_or_default(),
+                None => load_cameras().into_iter().map(|camera| camera.id).collect(),
+            };
+            let tunnels = camera_ids
+                .into_iter()
+                .map(|camera_id| {
+                    let status = match state.tunnel_manager.status(&camera_id) {
+                        TunnelStatus::Running => "running",
+                        TunnelStatus::Starting => "starting",
+                        TunnelStatus::Error(_) => "error",
+                        TunnelStatus::Stopped => "stopped",
+                    };
+                    serde_json::json!({ "id": camera_id, "status": status })
+                })
+                .collect::<Vec<_>>();
+            let payload = serde_json::json!({
+                "api_version": API_VERSION,
+                "status": if storage_ok { "ok" } else { "degraded" },
+                "storage": storage,
+                "camera_count": camera_count,
+                "tunnels": tunnels,
+            });
+            yield Ok(Event::default().event("system").json_data(payload).unwrap_or_else(|_| Event::default()));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    };
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn get_v1_cameras(State(state): State<AppState>) -> impl IntoResponse {
@@ -2439,6 +2489,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/me", get(current_user));
     let v1_protected = Router::new()
         .route("/users", get(get_v1_users).post(create_v1_user))
+        .route("/system/stream", get(system_stream))
         .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
         .route(
             "/cameras/:id",

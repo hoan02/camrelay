@@ -29,6 +29,19 @@ paths:
           description: Ready
         '503':
           description: Not ready
+  /api/v1/system/stream:
+    get:
+      summary: Stream authenticated system telemetry
+      description: Server-Sent Events with storage, camera count, and tunnel status snapshots.
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /api/v1/auth/login:
     post:
       security: []

@@ -68,9 +68,26 @@ function ProtectedLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { t } = useLocale();
   const { theme, toggleTheme } = useTheme();
+  const queryClient = useQueryClient();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
   const hasAuthHint = Boolean(window.localStorage.getItem("camrelay_authenticated") || window.localStorage.getItem("camrelay_access_token"));
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, enabled: hasAuthHint, retry: false, staleTime: 60_000 });
+
+  useEffect(() => {
+    if (!hasAuthHint) return;
+    const stream = new EventSource("/api/v1/system/stream");
+    const onSystem = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as { api_version: string; status: "ok" | "degraded"; storage: "legacy_json" | "sqlite"; camera_count: number; tunnels?: Array<{ id: string; status: string }> };
+        queryClient.setQueryData(["health"], { api_version: payload.api_version, status: payload.status, storage: payload.storage, camera_count: payload.camera_count });
+        if (payload.tunnels) queryClient.setQueryData(["tunnels"], payload.tunnels);
+      } catch {
+        // The stream is advisory; regular query refresh remains the fallback.
+      }
+    };
+    stream.addEventListener("system", onSystem as EventListener);
+    return () => { stream.removeEventListener("system", onSystem as EventListener); stream.close(); };
+  }, [hasAuthHint, queryClient]);
 
   useEffect(() => {
     if (me.isError && me.error instanceof ApiError && me.error.status === 401) {
