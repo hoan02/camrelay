@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -23,7 +23,7 @@ use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
-use camrelay_contract::{CameraSummary, API_VERSION};
+use camrelay_contract::{CameraSummary, RecordingSummary, API_VERSION};
 use camrelay_storage::Storage;
 
 use crate::config::{
@@ -51,12 +51,7 @@ pub struct PlaybackGrant {
 }
 
 async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let token = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+    let token = session_token(req.headers());
 
     if let Some(t) = token {
         if state.sessions.lock().unwrap().contains(&t) {
@@ -113,7 +108,13 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
     {
         let token = Uuid::new_v4().to_string();
         state.sessions.lock().unwrap().push(token.clone());
-        (StatusCode::OK, Json(LoginResponse { token })).into_response()
+        let cookie = format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/");
+        (
+            StatusCode::OK,
+            [(header::SET_COOKIE, cookie)],
+            Json(LoginResponse { token }),
+        )
+            .into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,
@@ -121,6 +122,44 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
         )
             .into_response()
     }
+}
+
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(token) = session_token(&headers) {
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .retain(|active| active != &token);
+    }
+    (
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            "camrelay_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+        )],
+    )
+        .into_response()
+}
+
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    {
+        return Some(token.to_string());
+    }
+
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value.split(';').find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == "camrelay_session").then(|| value.to_string())
+            })
+        })
 }
 
 async fn v1_health(State(state): State<AppState>) -> impl IntoResponse {
@@ -186,6 +225,34 @@ async fn get_v1_cameras(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /* ─── Brand handlers ─── */
+
+async fn get_v1_recordings(
+    State(state): State<AppState>,
+    Query(query): Query<RecordingsQuery>,
+) -> impl IntoResponse {
+    Json(
+        state
+            .recording_manager
+            .list_filtered(
+                query.camera_id.as_deref(),
+                query.status.as_deref(),
+                query.limit.unwrap_or(100),
+            )
+            .into_iter()
+            .map(|recording| RecordingSummary {
+                id: recording.id,
+                camera_id: recording.camera_id,
+                camera_name: recording.camera_name,
+                started_at: recording.started_at,
+                ended_at: recording.ended_at,
+                kind: recording.kind,
+                bytes: recording.bytes,
+                status: recording.status,
+                archive_available: recording.archive_path.is_some(),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
 
 async fn get_brands_handler() -> impl IntoResponse {
     Json(load_brands())
@@ -760,7 +827,9 @@ pub fn create_router(state: AppState) -> Router {
             auth_middleware,
         ));
 
-    let login_router = Router::new().route("/login", post(login));
+    let login_router = Router::new()
+        .route("/login", post(login))
+        .route("/logout", post(logout));
     let playback_router = Router::new()
         .route("/playback/:id", get(stream_recording_handler))
         .layer(middleware::from_fn_with_state(
@@ -768,13 +837,13 @@ pub fn create_router(state: AppState) -> Router {
             playback_auth_middleware,
         ));
     let v1_public = Router::new().route("/health", get(v1_health));
-    let v1_protected =
-        Router::new()
-            .route("/cameras", get(get_v1_cameras))
-            .layer(middleware::from_fn_with_state(
-                state.clone(),
-                auth_middleware,
-            ));
+    let v1_protected = Router::new()
+        .route("/cameras", get(get_v1_cameras))
+        .route("/recordings", get(get_v1_recordings))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
 
     Router::new()
         .nest("/api", protected)

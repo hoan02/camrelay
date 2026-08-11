@@ -35,7 +35,7 @@ export function App() {
       <Route index element={<Navigate to="/dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
       <Route path="cameras" element={<Cameras />} />
-      <Route path="recordings" element={<Placeholder title="Recordings" eyebrow="MEDIA LIBRARY" description="Timeline, retention, and cloud archive will live here." icon="archive" />} />
+      <Route path="recordings" element={<Recordings />} />
       <Route path="settings" element={<Placeholder title="Settings" eyebrow="CONTROL PLANE" description="Identity, providers, storage, and notification policies are being separated into this workspace." icon="settings" />} />
       <Route path="about" element={<Placeholder title="About Camrelay" eyebrow="SYSTEM NOTES" description="Technical architecture, security boundaries, and provider capability notes will be documented here." icon="info" />} />
     </Route>
@@ -51,9 +51,9 @@ function ProtectedLayout() {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
 
   useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem("camrelay_theme", theme); }, [theme]);
-  if (!window.localStorage.getItem("camrelay_access_token")) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!window.localStorage.getItem("camrelay_authenticated") && !window.localStorage.getItem("camrelay_access_token")) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
 
-  const logout = () => { window.localStorage.removeItem("camrelay_access_token"); navigate("/login"); };
+  const logout = async () => { await api.logout().catch(() => undefined); window.localStorage.removeItem("camrelay_authenticated"); window.localStorage.removeItem("camrelay_access_token"); navigate("/login"); };
   return <div className="app-shell">
     <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
       <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>camrelay</span></div>
@@ -84,7 +84,7 @@ function Login() {
   const [busy, setBusy] = useState(false);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError(""); setBusy(true);
-    try { const result = await api.login(username, password); window.localStorage.setItem("camrelay_access_token", result.token); navigate((location.state as { from?: string } | null)?.from ?? "/dashboard", { replace: true }); }
+    try { await api.login(username, password); window.localStorage.setItem("camrelay_authenticated", "1"); navigate((location.state as { from?: string } | null)?.from ?? "/dashboard", { replace: true }); }
     catch (cause) { setError(cause instanceof ApiError ? cause.message : "Camrelay API is not reachable."); }
     finally { setBusy(false); }
   };
@@ -101,6 +101,15 @@ function Cameras() {
   const { data: cameras, isLoading, isError } = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
   return <><PageHeading eyebrow="DEVICE FLEET" title="Cameras" description="Manage remote devices and the local relay endpoints that represent them." action={<button className="primary-button compact"><Icon name="plus" size={16} />Add camera</button>} />{isLoading && <div className="panel loading-panel">Loading camera inventory…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="camera" /></span><h2>Camera API is not connected</h2><p>The new console is ready for the versioned API. The legacy service can continue running while this boundary is migrated.</p></div>}{cameras && cameras.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="camera" /></span><h2>Your fleet is empty</h2><p>Add the first camera when the provider and credential migration is ready.</p><button className="secondary-button"><Icon name="plus" size={15} />Add first camera</button></div>}{cameras && cameras.length > 0 && <div className="camera-grid">{cameras.map(camera => <CameraCard key={camera.id} camera={camera} />)}</div>}</>;
 }
+
+function Recordings() {
+  const { data: recordings, isLoading, isError } = useQuery({ queryKey: ["recordings"], queryFn: api.recordings });
+  return <><PageHeading eyebrow="MEDIA LIBRARY" title="Recordings" description="Closed segments, local retention, and the path to your cloud archive." />{isLoading && <div className="panel loading-panel">Loading recording index…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>Recording API is not connected</h2><p>The new media surface is wired to the v1 contract and will remain read-only until archive controls migrate.</p></div>}{recordings && recordings.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="archive" /></span><h2>No closed segments</h2><p>Once recording is enabled and a segment closes, it will appear here with its retention and archive state.</p></div>}{recordings && recordings.length > 0 && <div className="panel recordings-list"><div className="recordings-header"><span>SEGMENT</span><span>CAMERA</span><span>STATUS</span><span>SIZE</span></div>{recordings.map(recording => <div className="recording-row" key={recording.id}><div><b>{formatDate(recording.started_at)}</b><small>{recording.kind}{recording.ended_at ? ` · ${formatTime(recording.ended_at)}` : " · in progress"}</small></div><span>{recording.camera_name}</span><span className={`recording-status ${recording.status}`}>{recording.archive_available ? "Archived" : recording.status}</span><span>{formatBytes(recording.bytes)}</span></div>)}</div>}</>;
+}
+
+function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value)); }
+function formatTime(value: string) { return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(new Date(value)); }
+function formatBytes(value: number) { if (!value) return "—"; if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`; return `${(value / (1024 * 1024)).toFixed(1)} MB`; }
 
 function CameraCard({ camera }: { camera: Camera }) { return <article className="camera-card"><div className="camera-preview"><span className="preview-label">NO LIVE PREVIEW</span><span className="preview-grid" /></div><div className="camera-body"><div className="camera-title"><span className="camera-status" /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div><button className="icon-button subtle" title="Camera actions">•••</button></div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? "Auto-start" : "Manual start"}</span></div></div></article>; }
 

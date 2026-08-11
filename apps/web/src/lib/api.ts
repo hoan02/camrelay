@@ -14,6 +14,18 @@ export type Health = {
   camera_count: number;
 };
 
+export type Recording = {
+  id: string;
+  camera_id: string;
+  camera_name: string;
+  started_at: string;
+  ended_at: string | null;
+  kind: string;
+  bytes: number;
+  status: string;
+  archive_available: boolean;
+};
+
 export type ApiErrorBody = {
   code?: string;
   message?: string;
@@ -37,7 +49,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, { ...init, headers, credentials: "include" });
   const body = (await response.json().catch(() => undefined)) as ApiErrorBody | T | undefined;
   if (!response.ok) {
     const errorBody = body as ApiErrorBody | undefined;
@@ -52,6 +64,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+  logout: () => request<void>("/api/logout", { method: "POST" }),
   cameras: () => request<Camera[]>("/api/v1/cameras"),
   health: () => request<Health>("/api/v1/health"),
+  recordings: () => request<Recording[]>("/api/v1/recordings"),
 };

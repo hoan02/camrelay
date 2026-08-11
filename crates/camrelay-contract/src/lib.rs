@@ -61,6 +61,19 @@ pub struct CameraSummary {
     pub auto_start: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RecordingSummary {
+    pub id: String,
+    pub camera_id: String,
+    pub camera_name: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub kind: String,
+    pub bytes: u64,
+    pub status: String,
+    pub archive_available: bool,
+}
+
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
         Self { items, next_cursor }
