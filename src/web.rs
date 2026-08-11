@@ -2129,23 +2129,35 @@ async fn get_recording_handler(
 #[derive(Serialize)]
 struct RecordingConfigResponse {
     enabled: bool,
+    live_enabled: bool,
     archive_enabled: bool,
     archive_configured: bool,
     segment_seconds: u32,
     local_retention_days: u32,
     ffmpeg_path: String,
+    checksum_algorithm: &'static str,
 }
 
-async fn get_recording_config(State(state): State<AppState>) -> impl IntoResponse {
+fn recording_config_response(state: &AppState) -> RecordingConfigResponse {
     let config = state.recording_manager.config();
-    Json(RecordingConfigResponse {
+    RecordingConfigResponse {
         enabled: config.recordings_enabled,
+        live_enabled: config.live_enabled,
         archive_enabled: config.archive_enabled,
         archive_configured: !config.archive_remote.trim().is_empty(),
         segment_seconds: config.segment_seconds,
         local_retention_days: config.local_retention_days,
         ffmpeg_path: config.ffmpeg_path.clone(),
-    })
+        checksum_algorithm: "sha256",
+    }
+}
+
+async fn get_recording_config(State(state): State<AppState>) -> impl IntoResponse {
+    Json(recording_config_response(&state))
+}
+
+async fn get_v1_recording_config(State(state): State<AppState>) -> impl IntoResponse {
+    Json(recording_config_response(&state))
 }
 
 async fn archive_recording_handler(
@@ -2582,6 +2594,7 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(delete_v1_provider),
         )
         .route("/recordings", get(get_v1_recordings))
+        .route("/recordings/config", get(get_v1_recording_config))
         .route("/events", get(get_v1_events))
         .route("/recordings/:id", get(get_v1_recording))
         .route(

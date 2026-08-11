@@ -38,6 +38,17 @@ export type Recording = {
   checksum_sha256: string | null;
 };
 
+export type RecordingConfig = {
+  enabled: boolean;
+  live_enabled: boolean;
+  archive_enabled: boolean;
+  archive_configured: boolean;
+  segment_seconds: number;
+  local_retention_days: number;
+  ffmpeg_path: string;
+  checksum_algorithm: string;
+};
+
 export type PlaybackTicket = { url: string; expires_in_seconds: number };
 export type LiveTicket = { protocol: "hls"; url: string; expires_in_seconds: number };
 
@@ -139,6 +150,7 @@ export const api = {
   updateCamera: (id: string, input: Partial<CameraInput>) => request<Camera>(`/api/v1/cameras/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteCamera: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: "DELETE" }),
   health: () => request<Health>("/api/v1/health"),
+  recordingConfig: () => request<RecordingConfig>("/api/v1/recordings/config"),
   recordings: (filters: { camera_id?: string; status?: string } = {}) => {
     const params = new URLSearchParams();
     if (filters.camera_id) params.set("camera_id", filters.camera_id);

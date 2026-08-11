@@ -32,6 +32,7 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/providers               authenticated, secret-free summaries
     POST   /api/v1/providers               authenticated provider onboarding
     GET    /api/v1/recordings              authenticated summaries; optional camera_id/status/limit filters
+    GET    /api/v1/recordings/config       authenticated recording/archive capability state
     GET    /api/v1/recordings/{recording_id} authenticated, secret-free detail
     POST   /api/v1/recordings/{recording_id}/playback-ticket
     POST   /api/v1/recordings/{recording_id}/archive
@@ -74,6 +75,11 @@ Recording summaries include an optional `checksum_sha256` calculated from the
 local MP4 bytes. Existing indexes are backfilled when a local file is next
 seen; remote-provider verification and resumable upload policy remain separate
 archive work.
+
+`GET /api/v1/recordings/config` returns read-only media capability state. It
+does not return the rclone remote name, OAuth material, or archive credentials.
+`local_retention_days: 0` means no automatic deletion; retention cleanup remains
+an explicit future operations policy.
 
 ## Roles
 

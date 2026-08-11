@@ -10,7 +10,7 @@ The `v1-foundation` branch is an incremental migration from the known `prototype
 
 - Rust is now a Cargo workspace with a transport-independent `camrelay-contract` crate.
 - `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, persistent English/Vietnamese settings, and an API client.
-- `apps/mobile` contains the Flutter companion scaffold using the same versioned API and platform secure storage for bearer tokens; Flutter build verification is pending until the SDK is installed.
+- `apps/mobile` contains the Flutter companion using the same versioned API and platform secure storage for bearer tokens; Android runner generation, debug APK build, analyzer, and widget test are verified locally.
 - `packages/design-tokens` is the first shared visual language seam for the future web and mobile clients.
 - `apps/web` is the feature-parity v1 console for development and can be served by the Rust binary by setting `web_root` to `apps/web/dist`; the legacy console remains available as a rollback path.
 
@@ -65,7 +65,7 @@ flowchart LR
 - Universal Dahua compatibility.
 - IMOU compatibility.
 - Automatic discovery or provisioning of cameras.
-- TLS, encrypted configuration storage, or production-grade secret management.
+- Built-in TLS, encrypted legacy JSON configuration, or production-grade external secret management.
 - Guaranteed reconnection after every network or device failure.
 - A native Frigate integration.
 - Provider probe success does not guarantee camera, firmware, model, region, or RTSP compatibility.

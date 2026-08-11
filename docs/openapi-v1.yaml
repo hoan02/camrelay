@@ -310,6 +310,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/RecordingSummary'
+  /api/v1/recordings/config:
+    get:
+      summary: Read recording and archive capabilities
+      responses:
+        '200':
+          description: Current media configuration without archive credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingConfig'
   /api/v1/recordings/{recording_id}:
     parameters:
       - name: recording_id
@@ -556,6 +566,18 @@ components:
         status: { type: string }
         archive_available: { type: boolean }
         checksum_sha256: { type: string, nullable: true, pattern: '^[a-f0-9]{64}$' }
+    RecordingConfig:
+      type: object
+      required: [enabled, live_enabled, archive_enabled, archive_configured, segment_seconds, local_retention_days, ffmpeg_path, checksum_algorithm]
+      properties:
+        enabled: { type: boolean }
+        live_enabled: { type: boolean }
+        archive_enabled: { type: boolean }
+        archive_configured: { type: boolean }
+        segment_seconds: { type: integer, minimum: 30 }
+        local_retention_days: { type: integer, minimum: 0 }
+        ffmpeg_path: { type: string }
+        checksum_algorithm: { type: string, enum: [sha256] }
     ProviderInput:
       allOf:
         - $ref: '#/components/schemas/ProviderPatch'
