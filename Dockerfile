@@ -8,7 +8,7 @@ COPY apps/web apps/web
 COPY packages/design-tokens packages/design-tokens
 RUN npm run web:build
 
-FROM rust:1.85-bookworm AS rust-build
+FROM rust:1.86-bookworm AS rust-build
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
