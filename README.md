@@ -347,6 +347,11 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 | GET | `/api/playback/:id?ticket=...` | Stream local or archived MP4 with Range support. |
 | POST | `/api/recordings/:id/archive` | Upload one segment through the configured rclone remote. |
 
+The legacy credential-bearing GET routes (`/api/brands`, `/api/cameras`,
+`/api/cameras/all`, and `/api/tokens`) are restricted to owner/admin roles.
+The versioned `/api/v1` routes return secret-free summaries to authorized
+clients and are the preferred integration surface.
+
 ## Security notes
 
 - Change the default dashboard password immediately.

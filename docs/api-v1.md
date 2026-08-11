@@ -129,6 +129,8 @@ legacy JSON otherwise. It returns only a secret-free summary. Camera startup,
 provider lookup, auto-start, recording reconciliation, token management, and
 the v1 management surface use the same SQLite source when that mode is enabled;
 legacy `/api` handlers remain only for rollback.
+The legacy credential-bearing GET handlers are restricted to owner/admin roles;
+v1 clients should use the secret-free provider, camera, and token summaries.
 
 Audit history records authenticated mutation method, path, response status,
 actor, and server timestamp. It intentionally excludes request bodies, query
