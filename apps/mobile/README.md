@@ -35,6 +35,19 @@ flutter build apk --debug
 flutter run --dart-define=CAMRELAY_API_BASE_URL=https://camrelay.example.com
 ```
 
+On Windows, if Flutter was installed without adding it to the user PATH, open
+a new PowerShell window and run:
+
+```powershell
+$flutterBin = Join-Path $env:USERPROFILE "develop\flutter\bin"
+$env:Path = "$flutterBin;$env:Path"
+flutter doctor
+```
+
+The Android SDK and Flutter SDK are separate installations. If `flutter doctor`
+reports unknown Android licenses, review and accept them with
+`flutter doctor --android-licenses` before building a release artifact.
+
 For a local appliance on the same LAN, use its HTTPS reverse-proxy address.
 Avoid shipping an HTTP endpoint or putting an access token in a URL, log, or
 deep link.
