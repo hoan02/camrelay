@@ -43,6 +43,13 @@ export type Provider = {
   main_server: string;
 };
 
+export type ProviderInput = {
+  name: string;
+  main_server: string;
+  app_username: string;
+  app_userkey: string;
+};
+
 export type Tunnel = { id: string; status: string };
 
 export type ApiErrorBody = {
@@ -89,6 +96,7 @@ export const api = {
   health: () => request<Health>("/api/v1/health"),
   recordings: () => request<Recording[]>("/api/v1/recordings"),
   providers: () => request<Provider[]>("/api/v1/providers"),
+  createProvider: (input: ProviderInput) => request<Provider>("/api/v1/providers", { method: "POST", body: JSON.stringify(input) }),
   tunnels: () => request<Tunnel[]>("/api/v1/tunnels"),
   startCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/start`, { method: "POST" }),
   stopCamera: (id: string) => request<void>(`/api/v1/cameras/${id}/stop`, { method: "POST" }),

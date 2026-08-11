@@ -181,7 +181,9 @@ impl Storage {
         &self,
         snapshot: &LegacySnapshot,
     ) -> Result<ImportReport, StorageError> {
-        if (!snapshot.brands.is_empty() || !snapshot.cameras.is_empty())
+        if (!snapshot.brands.is_empty()
+            || !snapshot.cameras.is_empty()
+            || !snapshot.tokens.is_empty())
             && self.secret_key.is_none()
         {
             return Err(StorageError::SecretKeyRequired);
@@ -239,12 +241,13 @@ impl Storage {
         }
 
         for token in &snapshot.tokens {
+            let token_value = self.encrypt_secret(&token.token)?;
             sqlx::query(
                 "INSERT INTO api_tokens (id, name, token, expires_at, enabled) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, token = excluded.token, expires_at = excluded.expires_at, enabled = excluded.enabled",
             )
             .bind(&token.id)
             .bind(&token.name)
-            .bind(&token.token)
+            .bind(token_value)
             .bind(&token.expires_at)
             .bind(i64::from(token.enabled as u8))
             .execute(&mut *transaction)
@@ -275,6 +278,133 @@ impl Storage {
         Ok(STANDARD.encode(encoded))
     }
 
+    fn decrypt_secret(&self, value: &str) -> Result<String, StorageError> {
+        let Some(secret_key) = self.secret_key else {
+            return Err(StorageError::SecretKeyRequired);
+        };
+        let encoded = STANDARD
+            .decode(value.as_bytes())
+            .map_err(|_| StorageError::SecretEncryption)?;
+        if encoded.len() < 12 {
+            return Err(StorageError::SecretEncryption);
+        }
+        let (nonce_bytes, ciphertext) = encoded.split_at(12);
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&secret_key));
+        let plaintext = cipher
+            .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+            .map_err(|_| StorageError::SecretEncryption)?;
+        String::from_utf8(plaintext).map_err(|_| StorageError::SecretEncryption)
+    }
+
+    pub async fn list_camera_configs(&self) -> Result<Vec<StoredCameraConfig>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id, name, brand, serial, username, password, remote_port, local_port, auto_start FROM cameras ORDER BY name, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(StoredCameraConfig {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    brand: row.try_get("brand")?,
+                    serial: row.try_get("serial")?,
+                    username: self.decrypt_secret(&row.try_get::<String, _>("username")?)?,
+                    password: self.decrypt_secret(&row.try_get::<String, _>("password")?)?,
+                    port: row.try_get::<i64, _>("remote_port")? as u16,
+                    local_port: row.try_get::<i64, _>("local_port")? as u16,
+                    auto_start: row.try_get::<i64, _>("auto_start")? != 0,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn find_camera_config(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredCameraConfig>, StorageError> {
+        Ok(self
+            .list_camera_configs()
+            .await?
+            .into_iter()
+            .find(|camera| camera.id == id))
+    }
+
+    pub async fn list_provider_configs(&self) -> Result<Vec<StoredProviderConfig>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id, name, main_server, app_username, app_userkey FROM providers ORDER BY name, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(StoredProviderConfig {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    main_server: row.try_get("main_server")?,
+                    app_username: self
+                        .decrypt_secret(&row.try_get::<String, _>("app_username")?)?,
+                    app_userkey: self.decrypt_secret(&row.try_get::<String, _>("app_userkey")?)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn find_provider_config(
+        &self,
+        name: &str,
+    ) -> Result<Option<StoredProviderConfig>, StorageError> {
+        Ok(self
+            .list_provider_configs()
+            .await?
+            .into_iter()
+            .find(|provider| provider.name == name))
+    }
+
+    pub async fn upsert_camera(&self, camera: &LegacyCamera) -> Result<(), StorageError> {
+        let username = self.encrypt_secret(&camera.username)?;
+        let password = self.encrypt_secret(&camera.password)?;
+        sqlx::query(
+            "INSERT INTO cameras (id, name, brand, serial, username, password, remote_port, local_port, auto_start) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, brand = excluded.brand, serial = excluded.serial, username = excluded.username, password = excluded.password, remote_port = excluded.remote_port, local_port = excluded.local_port, auto_start = excluded.auto_start",
+        )
+        .bind(&camera.id)
+        .bind(&camera.name)
+        .bind(&camera.brand)
+        .bind(&camera.serial)
+        .bind(username)
+        .bind(password)
+        .bind(i64::from(camera.port))
+        .bind(i64::from(camera.local_port))
+        .bind(i64::from(camera.auto_start as u8))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_camera(&self, id: &str) -> Result<bool, StorageError> {
+        let result = sqlx::query("DELETE FROM cameras WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn upsert_provider(&self, provider: &LegacyBrand) -> Result<(), StorageError> {
+        let app_username = self.encrypt_secret(&provider.app_username)?;
+        let app_userkey = self.encrypt_secret(&provider.app_userkey)?;
+        sqlx::query(
+            "INSERT INTO providers (id, name, main_server, app_username, app_userkey) VALUES (?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET id = excluded.id, main_server = excluded.main_server, app_username = excluded.app_username, app_userkey = excluded.app_userkey",
+        )
+        .bind(&provider.id)
+        .bind(&provider.name)
+        .bind(&provider.main_server)
+        .bind(app_username)
+        .bind(app_userkey)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub fn load_legacy_snapshot(root: impl AsRef<Path>) -> Result<LegacySnapshot, StorageError> {
         let root = root.as_ref();
         let config: serde_json::Value = read_json(root.join("config.json"))?;
@@ -302,6 +432,28 @@ pub struct StoredCamera {
     pub serial: String,
     pub local_port: u16,
     pub auto_start: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCameraConfig {
+    pub id: String,
+    pub name: String,
+    pub brand: String,
+    pub serial: String,
+    pub username: String,
+    pub password: String,
+    pub port: u16,
+    pub local_port: u16,
+    pub auto_start: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredProviderConfig {
+    pub id: String,
+    pub name: String,
+    pub main_server: String,
+    pub app_username: String,
+    pub app_userkey: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -405,9 +557,27 @@ mod tests {
             .import_legacy(&snapshot)
             .await
             .expect("second import");
+        storage
+            .upsert_camera(&snapshot.cameras[0])
+            .await
+            .expect("camera upsert");
+        storage
+            .upsert_provider(&snapshot.brands[0])
+            .await
+            .expect("provider upsert");
         assert_eq!(first.users, 1);
         assert_eq!(second.users, 0);
         assert_eq!(storage.camera_count().await.expect("camera count"), 1);
+        let cameras = storage
+            .list_camera_configs()
+            .await
+            .expect("camera secrets should decrypt");
+        assert_eq!(cameras[0].password, "camera-password");
+        let providers = storage
+            .list_provider_configs()
+            .await
+            .expect("provider secrets should decrypt");
+        assert_eq!(providers[0].app_userkey, "app-key");
         assert!(storage
             .verify_user("admin", "change-me")
             .await

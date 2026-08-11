@@ -60,4 +60,4 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 
 ## Current migration checkpoint
 
-The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and JSON-backed handlers. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. Database-backed persistence, versioned handlers, and serving the React build are subsequent migration gates; they are not represented as completed features yet.
+The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and legacy JSON handlers, while SQLite mode now owns v1 camera/provider snapshots, onboarding, tunnel startup, and recording reconciliation. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. Provider/camera update/delete parity, token migration, and making the React build the default remain later gates.

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::config::{load_brands, Camera};
+use crate::config::{load_brands, Brand, Camera};
 use crate::dh::p2p_handshake;
 use crate::process::{dh_reader, dh_writer, process_reader, process_writer};
 use crate::ptcp::PTCPEvent;
@@ -43,6 +43,10 @@ impl TunnelManager {
     }
 
     pub fn start(&self, camera: Camera) -> Result<(), String> {
+        self.start_with_brand(camera, None)
+    }
+
+    pub fn start_with_brand(&self, camera: Camera, provider: Option<Brand>) -> Result<(), String> {
         let id = camera.id.clone();
 
         match self.status(&id) {
@@ -63,7 +67,7 @@ impl TunnelManager {
 
         let task = tokio::spawn(async move {
             let s = statuses.clone();
-            let inner = tokio::spawn(run_tunnel(camera, s.clone()));
+            let inner = tokio::spawn(run_tunnel(camera, s.clone(), provider));
 
             match inner.await {
                 Ok(Ok(_)) => {
@@ -102,13 +106,19 @@ impl TunnelManager {
     }
 }
 
-async fn run_tunnel(camera: Camera, statuses: StatusMap) -> Result<(), String> {
+async fn run_tunnel(
+    camera: Camera,
+    statuses: StatusMap,
+    provider: Option<Brand>,
+) -> Result<(), String> {
     // Look up brand to get server/credentials
-    let brands = load_brands();
-    let brand = brands
-        .into_iter()
-        .find(|b| b.name == camera.brand)
-        .ok_or_else(|| format!("Brand '{}' not found in brands.json", camera.brand))?;
+    let brand = match provider {
+        Some(brand) => brand,
+        None => load_brands()
+            .into_iter()
+            .find(|b| b.name == camera.brand)
+            .ok_or_else(|| format!("Brand '{}' not found in brands.json", camera.brand))?,
+    };
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", camera.local_port))
         .await

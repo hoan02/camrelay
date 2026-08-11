@@ -27,8 +27,9 @@ Implemented in the current migration checkpoint:
 
     GET    /api/v1/health                 public migration health
     GET    /api/v1/cameras                authenticated, secret-free summaries
-    POST   /api/v1/cameras                authenticated camera onboarding in legacy mode
+    POST   /api/v1/cameras                authenticated camera onboarding
     GET    /api/v1/providers               authenticated, secret-free summaries
+    POST   /api/v1/providers               authenticated provider onboarding
     GET    /api/v1/recordings              authenticated, secret-free summaries
     GET    /api/v1/tunnels                 authenticated, secret-free lifecycle status
     POST   /api/v1/cameras/{camera_id}/start
@@ -42,15 +43,11 @@ storage and authorization behavior is migrated from the legacy handlers:
     POST   /api/v1/auth/logout
     GET    /api/v1/me
 
-    GET    /api/v1/cameras
     GET    /api/v1/cameras/{camera_id}
     PATCH  /api/v1/cameras/{camera_id}
-    POST   /api/v1/cameras/{camera_id}/start
-    POST   /api/v1/cameras/{camera_id}/stop
     GET    /api/v1/cameras/{camera_id}/diagnostics
 
     POST   /api/v1/cameras/{camera_id}/live-ticket
-    GET    /api/v1/recordings
     POST   /api/v1/recordings/{recording_id}/playback-ticket
     POST   /api/v1/recordings/{recording_id}/archive
 
@@ -69,7 +66,8 @@ storage and authorization behavior is migrated from the legacy handlers:
 
 Provider and camera secrets are never returned by GET endpoints. An update payload may contain a replacement secret; an omitted secret means keep the existing value.
 
-The current camera POST writes the legacy JSON source and returns only a
-secret-free summary. It deliberately returns `migration.camera_write_pending`
-when SQLite mode is enabled until tunnel startup, recording reconciliation,
-and CRUD all use the same database source of truth.
+The current camera POST writes SQLite when database mode is enabled and writes
+legacy JSON otherwise. It returns only a secret-free summary. Camera startup,
+provider lookup, auto-start, and recording reconciliation use the same SQLite
+source when that mode is enabled; legacy `/api` handlers remain for rollback
+until their CRUD parity is complete.

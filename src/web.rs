@@ -24,7 +24,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 use camrelay_contract::{CameraSummary, ProviderSummary, RecordingSummary, API_VERSION};
-use camrelay_storage::Storage;
+use camrelay_storage::{LegacyCamera, Storage, StoredCameraConfig, StoredProviderConfig};
 
 use crate::config::{
     load_brands, load_cameras, load_tokens, save_brands, save_cameras, save_tokens, ApiToken,
@@ -228,16 +228,6 @@ async fn create_v1_camera(
     State(state): State<AppState>,
     Json(body): Json<CameraPayload>,
 ) -> impl IntoResponse {
-    if state.storage.is_some() {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "code": "migration.camera_write_pending",
-                "message": "Camera writes are temporarily disabled while SQLite becomes the operational source."
-            })),
-        )
-            .into_response();
-    }
     if body.name.trim().is_empty()
         || body.brand.trim().is_empty()
         || body.serial.trim().is_empty()
@@ -256,7 +246,6 @@ async fn create_v1_camera(
             .into_response();
     }
 
-    let mut cameras = load_cameras();
     let camera = Camera {
         id: Uuid::new_v4().to_string(),
         name: body.name,
@@ -268,16 +257,41 @@ async fn create_v1_camera(
         local_port: body.local_port,
         auto_start: body.auto_start,
     };
-    cameras.push(camera.clone());
-    if save_cameras(&cameras).is_err() {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "code": "camera.save_failed",
-                "message": "Could not save camera configuration."
-            })),
-        )
-            .into_response();
+    if let Some(storage) = &state.storage {
+        let legacy = LegacyCamera {
+            id: camera.id.clone(),
+            name: camera.name.clone(),
+            brand: camera.brand.clone(),
+            serial: camera.serial.clone(),
+            username: camera.username.clone(),
+            password: camera.password.clone(),
+            port: camera.port,
+            local_port: camera.local_port,
+            auto_start: camera.auto_start,
+        };
+        if let Err(error) = storage.upsert_camera(&legacy).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "camera.save_failed",
+                    "message": error.to_string()
+                })),
+            )
+                .into_response();
+        }
+    } else {
+        let mut cameras = load_cameras();
+        cameras.push(camera.clone());
+        if save_cameras(&cameras).is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "camera.save_failed",
+                    "message": "Could not save camera configuration."
+                })),
+            )
+                .into_response();
+        }
     }
     (
         StatusCode::CREATED,
@@ -358,6 +372,75 @@ async fn get_v1_providers(State(state): State<AppState>) -> impl IntoResponse {
     .into_response()
 }
 
+async fn create_v1_provider(
+    State(state): State<AppState>,
+    Json(body): Json<BrandPayload>,
+) -> impl IntoResponse {
+    if body.name.trim().is_empty()
+        || body.main_server.trim().is_empty()
+        || body.app_username.trim().is_empty()
+        || body.app_userkey.trim().is_empty()
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "provider.invalid_input",
+                "message": "Name, signaling server, app username, and app userkey are required."
+            })),
+        )
+            .into_response();
+    }
+
+    let provider = Brand {
+        id: Uuid::new_v4().to_string(),
+        name: body.name,
+        main_server: body.main_server,
+        app_username: body.app_username,
+        app_userkey: body.app_userkey,
+    };
+    if let Some(storage) = &state.storage {
+        let legacy = camrelay_storage::LegacyBrand {
+            id: provider.id.clone(),
+            name: provider.name.clone(),
+            main_server: provider.main_server.clone(),
+            app_username: provider.app_username.clone(),
+            app_userkey: provider.app_userkey.clone(),
+        };
+        if let Err(error) = storage.upsert_provider(&legacy).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "provider.save_failed",
+                    "message": error.to_string()
+                })),
+            )
+                .into_response();
+        }
+    } else {
+        let mut providers = load_brands();
+        providers.push(provider.clone());
+        if save_brands(&providers).is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "provider.save_failed",
+                    "message": "Could not save provider configuration."
+                })),
+            )
+                .into_response();
+        }
+    }
+    (
+        StatusCode::CREATED,
+        Json(ProviderSummary {
+            id: provider.id,
+            name: provider.name,
+            main_server: provider.main_server,
+        }),
+    )
+        .into_response()
+}
+
 #[derive(Serialize)]
 struct TunnelSummary {
     id: String,
@@ -365,12 +448,20 @@ struct TunnelSummary {
 }
 
 async fn get_v1_tunnels(State(state): State<AppState>) -> impl IntoResponse {
+    let camera_ids: Vec<String> = match &state.storage {
+        Some(storage) => storage
+            .list_cameras()
+            .await
+            .map(|cameras| cameras.into_iter().map(|camera| camera.id).collect())
+            .unwrap_or_default(),
+        None => load_cameras().into_iter().map(|camera| camera.id).collect(),
+    };
     Json(
-        load_cameras()
+        camera_ids
             .into_iter()
             .map(|camera| TunnelSummary {
-                id: camera.id.clone(),
-                status: match state.tunnel_manager.status(&camera.id) {
+                id: camera.clone(),
+                status: match state.tunnel_manager.status(&camera) {
                     TunnelStatus::Running => "running".to_string(),
                     TunnelStatus::Starting => "starting".to_string(),
                     TunnelStatus::Error(error) => format!("error: {error}"),
@@ -529,9 +620,26 @@ async fn delete_camera(State(state): State<AppState>, Path(id): Path<String>) ->
 }
 
 async fn start_tunnel(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let cameras = load_cameras();
-    match cameras.into_iter().find(|c| c.id == id) {
-        Some(camera) => match state.tunnel_manager.start(camera) {
+    let camera_and_provider = match &state.storage {
+        Some(storage) => match storage.find_camera_config(&id).await {
+            Ok(Some(camera)) => {
+                let provider = storage
+                    .find_provider_config(&camera.brand)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(brand_from_storage);
+                Some((camera_from_storage(camera), provider))
+            }
+            _ => None,
+        },
+        None => load_cameras()
+            .into_iter()
+            .find(|camera| camera.id == id)
+            .map(|camera| (camera, None)),
+    };
+    match camera_and_provider {
+        Some((camera, provider)) => match state.tunnel_manager.start_with_brand(camera, provider) {
             Ok(_) => StatusCode::OK.into_response(),
             Err(e) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": e}))).into_response(),
         },
@@ -914,6 +1022,30 @@ async fn stream_recording_handler(
     response
 }
 
+fn camera_from_storage(camera: StoredCameraConfig) -> Camera {
+    Camera {
+        id: camera.id,
+        name: camera.name,
+        brand: camera.brand,
+        serial: camera.serial,
+        username: camera.username,
+        password: camera.password,
+        port: camera.port,
+        local_port: camera.local_port,
+        auto_start: camera.auto_start,
+    }
+}
+
+fn brand_from_storage(provider: StoredProviderConfig) -> Brand {
+    Brand {
+        id: provider.id,
+        name: provider.name,
+        main_server: provider.main_server,
+        app_username: provider.app_username,
+        app_userkey: provider.app_userkey,
+    }
+}
+
 pub fn create_router(state: AppState) -> Router {
     let web_root = state.config.web_root.clone();
     let web_index = format!("{web_root}/index.html");
@@ -966,7 +1098,7 @@ pub fn create_router(state: AppState) -> Router {
     let v1_public = Router::new().route("/health", get(v1_health));
     let v1_protected = Router::new()
         .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
-        .route("/providers", get(get_v1_providers))
+        .route("/providers", get(get_v1_providers).post(create_v1_provider))
         .route("/recordings", get(get_v1_recordings))
         .route("/tunnels", get(get_v1_tunnels))
         .route("/cameras/:id/start", post(start_tunnel))
