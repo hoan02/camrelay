@@ -31,6 +31,9 @@ fn default_live_dir() -> String {
 fn default_live_protocol() -> String {
     "hls".to_string()
 }
+fn default_webrtc_enabled() -> bool {
+    false
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
@@ -47,6 +50,8 @@ pub struct AppConfig {
     pub live_dir: String,
     #[serde(default = "default_live_protocol")]
     pub live_protocol: String,
+    #[serde(default = "default_webrtc_enabled")]
+    pub webrtc_enabled: bool,
     #[serde(default = "default_recordings_dir")]
     pub recordings_dir: String,
     #[serde(default = "default_recordings_index")]
@@ -84,6 +89,7 @@ impl Default for AppConfig {
             live_enabled: false,
             live_dir: default_live_dir(),
             live_protocol: default_live_protocol(),
+            webrtc_enabled: default_webrtc_enabled(),
             recordings_dir: default_recordings_dir(),
             recordings_index: default_recordings_index(),
             segment_seconds: default_segment_seconds(),
@@ -115,6 +121,13 @@ impl AppConfig {
             if !web_root.is_empty() {
                 config.web_root = web_root.to_string();
             }
+        }
+
+        if let Ok(value) = std::env::var("CAMRELAY_WEBRTC_ENABLED") {
+            config.webrtc_enabled = matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
         }
 
         config

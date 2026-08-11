@@ -196,7 +196,7 @@ paths:
       - $ref: '#/components/parameters/CameraId'
     post:
       summary: Issue a scoped live media ticket
-      description: Starts the configured live gateway when enabled and returns a camera-scoped ticket. The current supported protocol is HLS; clients must branch on the protocol field for future adapters.
+      description: Starts the configured live gateway when enabled and returns a camera-scoped ticket. HLS is the verified protocol; WebRTC is available only with the explicit private gateway profile and remains experimental.
       responses:
         '200':
           description: Live ticket
@@ -224,6 +224,57 @@ paths:
           description: HLS media file
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /api/v1/live/{ticket}/webrtc:
+    parameters:
+      - name: ticket
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      security: []
+      summary: Negotiate an experimental ticketed WHEP session
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: { type: string }
+      responses:
+        '201':
+          description: SDP answer and opaque Camrelay session location
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/sdp:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502': { description: Media gateway unavailable }
+  /api/v1/live/{ticket}/webrtc/{session}:
+    parameters:
+      - name: ticket
+        in: path
+        required: true
+        schema: { type: string }
+      - name: session
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      security: []
+      summary: Send a ticketed WHEP SDP/ICE update
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: { type: string }
+      responses:
+        '204': { description: Update accepted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      security: []
+      summary: Close a ticketed WHEP session
+      responses:
+        '200': { description: Gateway response }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /api/v1/cameras/{camera_id}/start:
     post:
       summary: Start a camera relay
@@ -619,8 +670,8 @@ components:
       properties:
         protocol:
           type: string
-          enum: [hls]
-          description: Current live gateway protocol. Future adapters must preserve this ticket envelope.
+          enum: [hls, webrtc]
+          description: Live gateway protocol. WebRTC requires the explicit private gateway profile and remains experimental.
         url: { type: string }
         expires_in_seconds: { type: integer, minimum: 1 }
     PlaybackTicket:
@@ -658,7 +709,7 @@ components:
         live_enabled: { type: boolean }
         live_protocol:
           type: string
-          description: Configured live gateway protocol. `hls` is the supported value today; another value is reported as unavailable until its adapter is implemented.
+          description: Configured live gateway protocol. `hls` is the verified default; `webrtc` requires the explicit private gateway profile.
         live_protocol_available: { type: boolean }
         archive_enabled: { type: boolean }
         archive_verify: { type: boolean }

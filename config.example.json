@@ -7,6 +7,7 @@
   "live_enabled": false,
   "live_dir": "live",
   "live_protocol": "hls",
+  "webrtc_enabled": false,
   "recordings_dir": "recordings",
   "recordings_index": "recordings.json",
   "segment_seconds": 300,

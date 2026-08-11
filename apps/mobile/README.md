@@ -63,8 +63,9 @@ and Xcode.
 - the Android source/runner and debug APK build are verified locally, but live
   HLS playback still needs an authorized Android device and running appliance;
 - an iOS runner and device build are not verified on Windows;
-- WebRTC remains a future adapter because the backend currently issues HLS
-  tickets only;
+- WebRTC is an experimental backend adapter behind the private MediaMTX
+  profile; this Flutter player intentionally keeps unknown protocols out of
+  the HLS/video_player path until a real-device adapter is verified;
 - playback behavior against a real camera still needs device validation;
 - the activity feed currently represents persisted recording segments; motion events
   need a camera/provider event source and are not claimed by this client yet.

@@ -58,7 +58,7 @@ flowchart LR
 - Brand-specific P2P server and app credentials.
 - SQLite v1 persistence with encrypted provider/camera secrets, Argon2id user passwords, refresh sessions, RBAC, and idempotent import from legacy JSON files.
 - Optional local HLS live preview through FFmpeg and a loopback-only RTSP credential proxy; camera secrets do not enter the FFmpeg command line or a sidecar service.
-- Live playback uses a transport-shaped ticket contract. HLS is the supported gateway today; web and mobile clients reject unknown protocols explicitly so a future WebRTC adapter can be added without changing navigation or credential boundaries.
+- Live playback uses a transport-shaped ticket contract. HLS is the verified gateway today; an opt-in private MediaMTX/WHEP foundation exists, while web and mobile clients reject unsupported protocols explicitly.
 - Direct and relay handshake paths in the Rust implementation, subject to device/cloud support.
 
 ### Not yet promised
@@ -223,10 +223,15 @@ Start a camera from the dashboard or API and wait until its tunnel status is `ru
 
 ```bash
 ffplay -rtsp_transport tcp \
-  "rtsp://admin:DEVICE_RTSP_PASSWORD@127.0.0.1:8551/cam/realmonitor?channel=1&subtype=0"
+  "rtsp://127.0.0.1:8551/cam/realmonitor?channel=1&subtype=0"
 ```
 
-The local port is the configured `local_port`; the RTSP path and channel can vary by device. Use the exact path required by the camera/NVR.
+The example intentionally contains no username, password, bearer token, or
+media secret. The local port is the configured `local_port`; the RTSP path and
+channel can vary by device. If the raw tunnel challenges for camera
+authentication, configure credentials in the trusted media consumer instead
+of embedding them in the URL or shell history. The ticketed HLS/WebRTC paths
+keep camera authentication inside Camrelay.
 
 For Frigate or another NVR, point the input at the same local RTSP URL. Ensure the relay host can reach the local port and that the service remains running.
 
@@ -247,6 +252,7 @@ Enable recording in config.json:
       "live_enabled": true,
       "live_dir": "live",
       "live_protocol": "hls",
+      "webrtc_enabled": false,
       "recordings_dir": "recordings",
       "recordings_index": "recordings.json",
       "segment_seconds": 300,
@@ -273,7 +279,7 @@ Set archive_remote to the configured remote name and enable archive_enabled. Upl
 
 The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
 
-To enable browser live preview, set `live_enabled` to `true`, install FFmpeg, start the camera relay, and press Live on the camera card. Camrelay creates short-lived HLS segments under `live_dir`, serves them through a camera-scoped ticket, and uses an in-process RTSP auth proxy so the camera username/password stays inside camrelay. HLS playback support depends on the browser; WebRTC remains a later gateway phase.
+To enable browser live preview, set `live_enabled` to `true`, install FFmpeg, start the camera relay, and press Live on the camera card. Camrelay creates short-lived HLS segments under `live_dir`, serves them through a camera-scoped ticket, and uses an in-process RTSP auth proxy so the camera username/password stays inside camrelay. HLS is the verified default. An experimental WebRTC foundation is available only through the private Compose override documented in [`docs/media-gateway.md`](docs/media-gateway.md); it uses a fixed credential-free internal publisher URL and does not publish MediaMTX ports.
 
 The SQLite v1 foundation is opt-in for now. Set `database_enabled` to `true` to create the configured database, apply SQLx migrations, and import any legacy JSON files idempotently. Before enabling it when providers or cameras exist, set `CAMRELAY_SECRET_KEY` to a base64-encoded 32-byte key (see `.env.example`). User passwords are Argon2id hashes; provider and camera secrets are encrypted with ChaCha20-Poly1305 and the master key must be backed up separately. In SQLite mode, v1 camera/provider reads, camera onboarding, tunnel startup, auto-start, recording reconciliation, auth, and token management use SQLite. Legacy JSON handlers remain available only as a rollback path; the database file is ignored by Git.
 
@@ -384,10 +390,10 @@ Completed in the v1 foundation:
 Next, in order:
 
 1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
-2. Add a WebRTC media gateway (MediaMTX, go2rtc, or an in-process alternative) behind the existing credential-free local proxy; HLS is already available for web/mobile and Frigate/FFmpeg integrations.
+2. Validate the private MediaMTX/WHEP gateway foundation with an authorized H264 camera; HLS is already available for web/mobile and Frigate/FFmpeg integrations. LAN ICE/TURN exposure remains a separate reviewed boundary.
 3. Add resumable archive transfer and event markers; local JPEG thumbnail generation, recording SHA-256 metadata, remote verification, retention preview, and owner/admin-confirmed local cleanup are now indexed/exposed.
 4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
-5. Validate ticket-backed playback on an authorized Android device and complete the iOS runner/device build on macOS; then add a WebRTC adapter when the gateway contract is finalized.
+5. Validate ticket-backed playback on an authorized Android device and complete the iOS runner/device build on macOS; then add browser/Flutter WebRTC adapters after real gateway evidence.
 
 See [the media gateway design](docs/media-gateway.md) and [the authorized device validation matrix](docs/device-validation-matrix.md) for the next-phase contracts and evidence requirements.
 

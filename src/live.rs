@@ -6,6 +6,8 @@
 //! served through expiring, scoped tickets by the HTTP layer.
 
 pub const HLS_PROTOCOL: &str = "hls";
+pub const WEBRTC_PROTOCOL: &str = "webrtc";
+const MEDIAMTX_RTSP_BASE_URL: &str = "rtsp://mediamtx:8554";
 
 use std::{
     collections::HashMap,
@@ -53,7 +55,11 @@ impl LiveManager {
     }
 
     pub fn protocol_available(&self) -> bool {
-        self.protocol() == HLS_PROTOCOL
+        match self.protocol().as_str() {
+            HLS_PROTOCOL => true,
+            WEBRTC_PROTOCOL => self.config.webrtc_enabled,
+            _ => false,
+        }
     }
 
     pub fn is_running(&self, camera_id: &str) -> bool {
@@ -95,46 +101,70 @@ impl LiveManager {
             self.proxy.stop(&camera.id);
             return Err(format!("Could not create live directory: {error}"));
         }
-        let playlist = camera_dir.join("index.m3u8");
-        let segment_pattern = camera_dir.join("segment-%05d.ts");
         let source = format!("rtsp://127.0.0.1:{proxy_port}/cam/realmonitor?channel=1&subtype=0");
-        let playlist = playlist.to_string_lossy().to_string();
-        let segment_pattern = segment_pattern.to_string_lossy().to_string();
-
-        let child = Command::new(&self.config.ffmpeg_path)
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "warning",
-                "-rtsp_transport",
-                "tcp",
-                "-i",
-                &source,
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a:0?",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-f",
-                "hls",
-                "-hls_time",
-                "2",
-                "-hls_list_size",
-                "6",
-                "-hls_flags",
-                "delete_segments+append_list+omit_endlist",
-                "-hls_segment_filename",
-                &segment_pattern,
-                &playlist,
-            ])
-            .spawn()
-            .map_err(|error| {
-                self.proxy.stop(&camera.id);
-                format!("Could not start FFmpeg live gateway: {error}")
-            })?;
+        let child = if self.protocol() == WEBRTC_PROTOCOL {
+            let output = format!("{MEDIAMTX_RTSP_BASE_URL}/camrelay/{}", camera.id);
+            Command::new(&self.config.ffmpeg_path)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "warning",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-i",
+                    &source,
+                    "-map",
+                    "0:v:0",
+                    "-c:v",
+                    "copy",
+                    "-an",
+                    "-f",
+                    "rtsp",
+                    "-rtsp_transport",
+                    "tcp",
+                    &output,
+                ])
+                .spawn()
+        } else {
+            let playlist = camera_dir.join("index.m3u8");
+            let segment_pattern = camera_dir.join("segment-%05d.ts");
+            let playlist = playlist.to_string_lossy().to_string();
+            let segment_pattern = segment_pattern.to_string_lossy().to_string();
+            Command::new(&self.config.ffmpeg_path)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "warning",
+                    "-rtsp_transport",
+                    "tcp",
+                    "-i",
+                    &source,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a:0?",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "aac",
+                    "-f",
+                    "hls",
+                    "-hls_time",
+                    "2",
+                    "-hls_list_size",
+                    "6",
+                    "-hls_flags",
+                    "delete_segments+append_list+omit_endlist",
+                    "-hls_segment_filename",
+                    &segment_pattern,
+                    &playlist,
+                ])
+                .spawn()
+        }
+        .map_err(|error| {
+            self.proxy.stop(&camera.id);
+            format!("Could not start FFmpeg live gateway: {error}")
+        })?;
         self.processes.lock().unwrap().insert(camera.id, child);
         Ok(())
     }
@@ -177,5 +207,17 @@ mod tests {
 
         assert_eq!(manager.protocol(), "webrtc");
         assert!(!manager.protocol_available());
+    }
+
+    #[test]
+    fn webrtc_requires_explicit_configuration() {
+        let config = AppConfig {
+            live_protocol: WEBRTC_PROTOCOL.to_string(),
+            webrtc_enabled: true,
+            ..AppConfig::default()
+        };
+        let manager = LiveManager::new(config, RtspProxyManager::new());
+
+        assert!(manager.protocol_available());
     }
 }

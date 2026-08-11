@@ -20,6 +20,30 @@
    docker compose up -d --build
    ```
 
+## Private WebRTC profile
+
+WebRTC is an explicit opt-in. The override keeps RTSP (`8554`), MediaMTX
+WHEP signaling (`8889`), and ICE UDP (`8189`) on an internal Docker network.
+Camrelay publishes to the fixed internal destination
+`rtsp://mediamtx:8554/camrelay/<camera-id>` without credentials, then proxies
+WHEP through a short-lived Camrelay live ticket.
+
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.webrtc.yml \
+  up -d --build
+```
+
+The baseline intentionally publishes no MediaMTX port to the host. A reviewed
+LAN ICE gateway or TURN deployment can be added later after firewall and
+remote-network requirements are known. Do not publish RTSP or WHEP directly,
+and do not add credentials to an RTSP URL.
+
+This profile is a signaling/media-gateway foundation. Browser/device playback
+still depends on camera codec support and an authorized-camera test; TURN for
+remote networks and broad codec transcoding remain roadmap items.
+
 The image includes FFmpeg and rclone for the recording/archive path. It runs
 as the unprivileged `camrelay` user. Keep port 8080 behind a TLS reverse proxy
 when it is reachable outside the trusted LAN.

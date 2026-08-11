@@ -10,6 +10,7 @@ use axum::{
     routing::{get, patch, post, put},
     Json, Router,
 };
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -50,6 +51,8 @@ pub struct AppState {
     pub tunnel_manager: Arc<TunnelManager>,
     pub live_manager: LiveManager,
     pub live_tickets: Arc<Mutex<HashMap<String, LiveGrant>>>,
+    pub webrtc_client: reqwest::Client,
+    pub webrtc_sessions: Arc<Mutex<HashMap<String, WebRtcSession>>>,
     pub recording_manager: RecordingManager,
     pub playback_tickets: Arc<Mutex<std::collections::HashMap<String, PlaybackGrant>>>,
     pub storage: Option<Storage>,
@@ -73,6 +76,16 @@ pub struct LiveGrant {
     pub camera_id: String,
     pub expires_at: Instant,
 }
+
+#[derive(Clone)]
+pub struct WebRtcSession {
+    pub ticket: String,
+    pub remote_path: String,
+    pub expires_at: Instant,
+}
+
+const MEDIAMTX_WHEP_BASE_URL: &str = "http://mediamtx:8889";
+const MAX_WHEP_SDP_BYTES: usize = 4 * 1024 * 1024;
 
 async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let Some(token) = session_token(req.headers()) else {
@@ -2000,8 +2013,8 @@ async fn get_tunnel_statuses(State(state): State<AppState>) -> impl IntoResponse
                 TunnelStatus::Running => (
                     "running".to_string(),
                     Some(format!(
-                        "rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-                        cam.username, cam.password, cam.local_port
+                        "rtsp://127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
+                        cam.local_port
                     )),
                 ),
                 TunnelStatus::Starting => ("starting".to_string(), None),
@@ -2036,8 +2049,8 @@ async fn get_cameras_all(State(state): State<AppState>) -> impl IntoResponse {
         .map(|cam| {
             let rtsp = match state.tunnel_manager.status(&cam.id) {
                 TunnelStatus::Running => format!(
-                    "rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-                    cam.username, cam.password, cam.local_port
+                    "rtsp://127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
+                    cam.local_port
                 ),
                 _ => String::new(),
             };
@@ -2365,7 +2378,7 @@ async fn issue_live_ticket(
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "code": "live.protocol_unavailable",
-                "message": "The configured live protocol is not available yet. Set live_protocol to hls."
+                "message": "The configured live protocol is not available in this deployment."
             })),
         )
             .into_response();
@@ -2420,15 +2433,240 @@ async fn issue_live_ticket(
             expires_at: now + Duration::from_secs(expires_in_seconds),
         },
     );
+    let protocol = state.live_manager.protocol();
+    let url = if protocol == crate::live::WEBRTC_PROTOCOL {
+        format!("/api/v1/live/{ticket}/webrtc")
+    } else {
+        format!("/api/v1/live/{ticket}/index.m3u8")
+    };
     (
         StatusCode::OK,
         Json(LiveTicketResponse {
-            protocol: state.live_manager.protocol(),
-            url: format!("/api/v1/live/{ticket}/index.m3u8"),
+            protocol,
+            url,
             expires_in_seconds,
         }),
     )
         .into_response()
+}
+
+fn live_grant(state: &AppState, ticket: &str) -> Option<LiveGrant> {
+    let now = Instant::now();
+    let grant = {
+        let mut tickets = state.live_tickets.lock().unwrap();
+        tickets.retain(|_, grant| grant.expires_at > now);
+        tickets.get(ticket).cloned()
+    }?;
+    (grant.expires_at > now).then_some(grant)
+}
+
+fn normalize_whep_location(location: &str) -> Option<String> {
+    let url = if location.starts_with('/') {
+        Url::parse(&format!("{MEDIAMTX_WHEP_BASE_URL}{location}"))
+    } else {
+        Url::parse(location)
+    }
+    .ok()?;
+
+    if url.scheme() != "http"
+        || url.host_str() != Some("mediamtx")
+        || url.port().is_some_and(|port| port != 8889)
+        || !url.path().starts_with("/camrelay/")
+        || url.path().contains("..")
+        || url.path().contains('\\')
+    {
+        return None;
+    }
+
+    let mut path = url.path().to_string();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    Some(path)
+}
+
+fn whep_ticket_error() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "code": "live.ticket_invalid",
+            "message": "Live ticket expired or invalid."
+        })),
+    )
+        .into_response()
+}
+
+fn whep_gateway_error() -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({
+            "code": "live.webrtc_gateway_unavailable",
+            "message": "The WebRTC gateway is unavailable."
+        })),
+    )
+        .into_response()
+}
+
+async fn whep_response(response: reqwest::Response, location: Option<String>) -> Response {
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let headers = response.headers().clone();
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(_) => return whep_gateway_error(),
+    };
+    let mut builder = Response::builder().status(status);
+    for name in [
+        "content-type",
+        "etag",
+        "accept-patch",
+        "link",
+        "cache-control",
+    ] {
+        if let Some(value) = headers.get(name) {
+            builder = builder.header(name, value);
+        }
+    }
+    if let Some(location) = location {
+        builder = builder.header(header::LOCATION, location);
+    } else if let Some(value) = headers.get(header::LOCATION) {
+        builder = builder.header(header::LOCATION, value);
+    }
+    builder
+        .body(Body::from(body))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+async fn whep_post_handler(
+    State(state): State<AppState>,
+    Path(ticket): Path<String>,
+    body: Body,
+) -> Response {
+    let Some(grant) = live_grant(&state, &ticket) else {
+        return whep_ticket_error();
+    };
+    if state.live_manager.protocol() != crate::live::WEBRTC_PROTOCOL
+        || !safe_live_component(&grant.camera_id)
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let body = match axum::body::to_bytes(body, MAX_WHEP_SDP_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let target = format!("{MEDIAMTX_WHEP_BASE_URL}/camrelay/{}/whep", grant.camera_id);
+    let response = match state
+        .webrtc_client
+        .post(target)
+        .header(header::CONTENT_TYPE, "application/sdp")
+        .header(header::ACCEPT, "application/sdp")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return whep_gateway_error(),
+    };
+    if !response.status().is_success() {
+        return whep_response(response, None).await;
+    }
+    let Some(location) = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(normalize_whep_location)
+    else {
+        return whep_gateway_error();
+    };
+    let session = Uuid::new_v4().to_string();
+    let local_location = format!("/api/v1/live/{ticket}/webrtc/{session}");
+    let expires_at = grant.expires_at;
+    {
+        let mut sessions = state.webrtc_sessions.lock().unwrap();
+        sessions.retain(|_, session| session.expires_at > Instant::now());
+        sessions.insert(
+            session,
+            WebRtcSession {
+                ticket,
+                remote_path: location,
+                expires_at,
+            },
+        );
+    }
+    whep_response(response, Some(local_location)).await
+}
+
+async fn whep_patch_handler(
+    State(state): State<AppState>,
+    Path((ticket, session)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(grant) = live_grant(&state, &ticket) else {
+        return whep_ticket_error();
+    };
+    let remote_path = {
+        let sessions = state.webrtc_sessions.lock().unwrap();
+        sessions
+            .get(&session)
+            .filter(|value| value.ticket == ticket && value.expires_at > Instant::now())
+            .map(|value| value.remote_path.clone())
+    };
+    if remote_path.is_none() || grant.expires_at <= Instant::now() {
+        return whep_ticket_error();
+    }
+    let body = match axum::body::to_bytes(body, MAX_WHEP_SDP_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let mut request = state
+        .webrtc_client
+        .patch(format!("{MEDIAMTX_WHEP_BASE_URL}{}", remote_path.unwrap()))
+        .header(header::CONTENT_TYPE, "application/sdp")
+        .header(header::ACCEPT, "application/sdp");
+    if let Some(if_match) = headers.get(header::IF_MATCH) {
+        request = request.header(header::IF_MATCH, if_match);
+    }
+    let response = match request.body(body).send().await {
+        Ok(response) => response,
+        Err(_) => return whep_gateway_error(),
+    };
+    whep_response(response, None).await
+}
+
+async fn whep_delete_handler(
+    State(state): State<AppState>,
+    Path((ticket, session)): Path<(String, String)>,
+) -> Response {
+    let Some(grant) = live_grant(&state, &ticket) else {
+        return whep_ticket_error();
+    };
+    let remote_path = {
+        let mut sessions = state.webrtc_sessions.lock().unwrap();
+        let valid = sessions
+            .get(&session)
+            .filter(|value| value.ticket == ticket && value.expires_at > Instant::now())
+            .is_some();
+        if valid {
+            sessions.remove(&session).map(|value| value.remote_path)
+        } else {
+            None
+        }
+    };
+    if remote_path.is_none() || grant.expires_at <= Instant::now() {
+        return whep_ticket_error();
+    }
+    let response = match state
+        .webrtc_client
+        .delete(format!("{MEDIAMTX_WHEP_BASE_URL}{}", remote_path.unwrap()))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return whep_gateway_error(),
+    };
+    whep_response(response, None).await
 }
 
 async fn stream_live_handler(
@@ -2745,6 +2983,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(v1_health))
         .route("/system/health", get(v1_health))
         .route("/system/readiness", get(v1_readiness))
+        .route("/live/:ticket/webrtc", post(whep_post_handler))
+        .route(
+            "/live/:ticket/webrtc/:session",
+            patch(whep_patch_handler).delete(whep_delete_handler),
+        )
         .route("/live/:ticket/*file", get(stream_live_handler));
     let v1_auth = Router::new()
         .route("/auth/login", post(login))
@@ -2821,7 +3064,7 @@ pub fn create_router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::legacy_secret_read_path;
+    use super::{legacy_secret_read_path, normalize_whep_location};
 
     #[test]
     fn legacy_secret_routes_are_explicitly_scoped() {
@@ -2832,5 +3075,19 @@ mod tests {
         assert!(legacy_secret_read_path("/cameras"));
         assert!(!legacy_secret_read_path("/api/v1/providers"));
         assert!(!legacy_secret_read_path("/api/recordings"));
+    }
+
+    #[test]
+    fn whep_location_is_restricted_to_private_mediamtx_path() {
+        assert_eq!(
+            normalize_whep_location("http://mediamtx:8889/camrelay/cam-1/whep/abc"),
+            Some("/camrelay/cam-1/whep/abc".to_string())
+        );
+        assert_eq!(
+            normalize_whep_location("/camrelay/cam-1/whep/abc?x=1"),
+            Some("/camrelay/cam-1/whep/abc?x=1".to_string())
+        );
+        assert!(normalize_whep_location("https://example.com/camrelay/cam-1/whep/abc").is_none());
+        assert!(normalize_whep_location("http://mediamtx:8889/admin").is_none());
     }
 }

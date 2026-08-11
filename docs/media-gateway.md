@@ -1,11 +1,13 @@
 # Media gateway design
 
-This document freezes the boundary for the next media phase without claiming
-that WebRTC is implemented. The shipped transport is ticketed HLS. WebRTC is
-an additional adapter that must preserve the same credential and authorization
-boundaries.
+This document freezes the media boundary for the private-network phase. HLS
+is the verified live transport. WebRTC now has a guarded Rust WHEP proxy and
+an explicit MediaMTX Compose profile, but it is not a claim of universal
+browser/device playback.
 
-## Current path
+## Current paths
+
+Verified HLS path:
 
 ```text
 camera P2P/PTCP
@@ -16,61 +18,96 @@ camera P2P/PTCP
     -> web / mobile / Frigate / FFmpeg
 ```
 
-The HLS worker receives an RTSP URL pointing at the loopback proxy. It never
-receives the camera username/password and no sidecar is trusted with those
-secrets.
+Opt-in WebRTC foundation:
 
-`config.json` selects the gateway with `live_protocol`. Use `hls` for the
-currently implemented adapter. An unsupported value is exposed in the
-read-only media capability response and live-ticket requests fail with a
-specific `live.protocol_unavailable` error; Camrelay does not silently fall
-back to a different protocol.
+```text
+camera P2P/PTCP
+    -> camrelay tunnel
+    -> loopback RTSP credential proxy
+    -> FFmpeg publisher
+    -> rtsp://mediamtx:8554/camrelay/<camera-id>
+    -> MediaMTX on an internal Docker network
+    -> Camrelay WHEP proxy
+    -> short-lived live ticket
+```
+
+The publisher URL is fixed and contains no username, password, bearer token,
+or media secret. Camera credentials remain inside Camrelay's RTSP proxy. The
+MediaMTX RTSP and WHEP ports are private service ports, not host ports, in the
+baseline Compose profile.
 
 ## Gateway boundary
 
-Any future WebRTC gateway must accept only a credential-free local source:
+MediaMTX is a media sidecar, not an identity or camera-credential service. It
+must not own provider credentials, camera credentials, user roles, SQLite, or
+live-ticket issuance. Camrelay owns the ticket and stores the upstream WHEP
+session `Location`; clients receive only a Camrelay URL containing an opaque
+short-lived ticket and local session id.
 
-```text
-rtsp://127.0.0.1:<proxy-port>/cam/realmonitor?channel=1&subtype=0
-```
+The WHEP proxy accepts only SDP-sized bodies, uses a fixed internal
+`http://mediamtx:8889` destination, validates MediaMTX `Location` values, and
+rejects external or path-escaping locations. It forwards no API bearer token
+to MediaMTX.
 
-The gateway may own codec conversion, packetization, ICE and WebRTC session
-state. It must not own provider credentials, camera credentials, user roles,
-or the SQLite database. A sidecar deployment must use a private service
-network and must not expose its control API publicly.
+## Configuration
 
-## Client contract
-
-The existing live response is intentionally transport-shaped:
+The default HLS config remains safe and unchanged:
 
 ```json
 {
-  "protocol": "hls",
-  "url": "/api/v1/live/<ticket>/index.m3u8",
+  "live_enabled": true,
+  "live_protocol": "hls",
+  "webrtc_enabled": false
+}
+```
+
+The private WebRTC profile is explicit:
+
+```bash
+docker compose \
+  -f deploy/compose/docker-compose.yml \
+  -f deploy/compose/docker-compose.webrtc.yml \
+  up -d --build
+```
+
+It enables `CAMRELAY_WEBRTC_ENABLED` and adds MediaMTX to an internal Docker
+network. It intentionally publishes no RTSP (`8554`), WHEP (`8889`), or ICE
+(`8189`) port. A future LAN ICE gateway or TURN edge must be reviewed and
+enabled separately, with firewall scope and remote-network behavior documented.
+
+## Client contract
+
+The live-ticket envelope stays transport-shaped:
+
+```json
+{
+  "protocol": "webrtc",
+  "url": "/api/v1/live/<ticket>/webrtc",
   "expires_in_seconds": 900
 }
 ```
 
-Clients must branch on `protocol` and ignore fields they do not understand. The
-current web and mobile clients support `hls` plus HTTP playback tickets; an
-unknown protocol is surfaced as an unsupported adapter instead of being passed
-to an HLS player by accident.
-The HLS URL is a short-lived, camera-scoped media ticket; the API bearer is
-not appended to it. A future WebRTC response may use the same envelope with a
-WebRTC signaling URL and scoped ticket metadata, but it must be added to the
-OpenAPI contract before implementation.
+The WHEP flow is:
 
-## WebRTC implementation gates
+```text
+POST  /api/v1/live/<ticket>/webrtc
+PATCH /api/v1/live/<ticket>/webrtc/<session>
+DELETE /api/v1/live/<ticket>/webrtc/<session>
+```
 
-1. Choose the gateway implementation and verify its license, supported codecs,
-   ICE/TURN behavior, and container/network model.
-2. Add a backend adapter with explicit start/stop ownership and cancellation.
-3. Add a protocol-aware ticket endpoint and OpenAPI schemas; keep HLS as the
-   fallback when WebRTC is unavailable.
-4. Verify browser and Android/iOS clients against a real camera, including
-   reconnect, expired tickets, multiple viewers, and a camera disconnect.
-5. Add metrics for gateway session count, negotiation failures, ICE failures,
-   source stalls, and ticket expiry without logging credentials or ticket URLs.
+Clients must branch on `protocol` and never pass an RTSP URL to a browser or
+mobile player. HLS remains the fallback when WebRTC is disabled or unavailable.
 
-WebRTC is not marked complete until all five gates have evidence. Until then,
-HLS remains the supported live transport.
+## Verification gates
+
+1. Validate the MediaMTX image/config and the private service network.
+2. Test WHEP negotiation with an authorized camera and H264-compatible source.
+3. Add web and Android/iOS WebRTC adapters with expired-ticket, reconnect,
+   multiple-viewer, and camera-disconnect tests.
+4. Decide the LAN ICE or TURN boundary; publish only the minimum reviewed UDP
+   surface, never RTSP or MediaMTX control/signaling ports directly.
+5. Add metrics for session count, negotiation/ICE failures, source stalls, and
+   ticket expiry without logging credentials, SDP, or ticket URLs.
+
+Until these gates have evidence, WebRTC is experimental and HLS is the
+supported live transport.

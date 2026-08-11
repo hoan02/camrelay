@@ -114,6 +114,8 @@ async fn main() {
         tunnel_manager,
         live_manager,
         live_tickets: Arc::new(Mutex::new(HashMap::new())),
+        webrtc_client: reqwest::Client::new(),
+        webrtc_sessions: Arc::new(Mutex::new(HashMap::new())),
         recording_manager,
         playback_tickets: Arc::new(Mutex::new(std::collections::HashMap::new())),
         storage,

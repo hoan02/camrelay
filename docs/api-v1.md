@@ -53,6 +53,9 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/cameras/{camera_id}/diagnostics
     POST   /api/v1/cameras/{camera_id}/live-ticket
     GET    /api/v1/live/{ticket}/{file}     scoped HLS playlist/segment delivery
+    POST   /api/v1/live/{ticket}/webrtc     ticketed WHEP offer
+    PATCH  /api/v1/live/{ticket}/webrtc/{session}  ticketed ICE/SDP update
+    DELETE /api/v1/live/{ticket}/webrtc/{session}  ticketed WHEP session close
     GET    /api/v1/providers/{provider_id}
     PATCH  /api/v1/providers/{provider_id}
     DELETE /api/v1/providers/{provider_id}
@@ -67,8 +70,9 @@ Implemented in the current migration checkpoint:
     GET    /api/v1/users                 owner-only, secret-free user summaries
     POST   /api/v1/users                 owner-only user creation
 
-The live media transport currently exposes ticketed HLS. WebRTC connection
-metadata remains a later media-gateway phase.
+The live media transport exposes ticketed HLS and an opt-in WebRTC/WHEP
+foundation. WebRTC requires the private Compose profile and is not yet a
+verified browser/mobile compatibility claim.
 
 The events endpoint currently returns normalized recording/system activity. Each
 recording segment is represented with its optional `recording_id`, camera,
@@ -115,11 +119,12 @@ server-side session tokens; logout revokes the SQLite session and clears the coo
 
 When `live_enabled` is true and a camera relay is running, the live-ticket
 endpoint starts the configured media gateway and returns a 15-minute,
-camera-scoped ticket envelope. The current gateway protocol is `hls`; clients
-must branch on `protocol` and show a clear unsupported-state for adapters they
+camera-scoped ticket envelope. `hls` is the verified default. When the explicit
+private WebRTC profile is enabled, `webrtc` returns a WHEP signaling URL and
+Camrelay keeps the upstream MediaMTX session location server-side. Clients
+must branch on `protocol` and show a clear unsupported state for adapters they
 do not implement. FFmpeg reads a loopback RTSP credential proxy; camera
-credentials do not appear in the FFmpeg command line or leave camrelay for a
-sidecar service.
+credentials do not appear in the FFmpeg command line, publish URL, or sidecar.
 
 Provider names are immutable after creation because camera records reference the
 provider by name. A provider in use by a camera cannot be deleted.
