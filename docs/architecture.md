@@ -45,8 +45,8 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 
 - The server is the only component allowed to read vendor and camera credentials.
 - User passwords use Argon2id. Provider/device secrets use an encrypted envelope keyed by `CAMRELAY_SECRET_KEY`; the key is never stored in SQLite or the repository. Refresh sessions are server-side and revocable.
-- Web uses secure HttpOnly session cookies. Mobile uses short-lived access tokens and refresh tokens in platform secure storage.
-- A live/playback URL is a short-lived ticket scoped to one user and camera/recording.
+- Web uses secure HttpOnly session cookies. Mobile uses a bearer session token in platform secure storage; automatic refresh rotation remains a client milestone.
+- A live/playback URL is a short-lived bearer ticket scoped to one camera or recording; issuance still requires an authenticated API client.
 - SQLite in WAL mode is the default single-appliance database. SQLx migrations are the schema truth.
 - Runtime JSON files are legacy import sources, not the v1 system of record.
 

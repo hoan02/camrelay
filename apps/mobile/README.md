@@ -16,7 +16,8 @@ The first scaffold uses Flutter Material 3 with the Camrelay signal-room color
 language. The API client follows `docs/openapi-v1.yaml`; it does not call the
 legacy `/api` surface. It includes camera lifecycle, recording playback
 tickets, and the credential-free HLS live-ticket contract; native video
-playback is the next SDK-verified mobile slice.
+playback is the next SDK-verified mobile slice. Use `resolveUrl()` when passing
+the API's relative ticket URL to a native video package.
 
 ## Run
 
@@ -36,7 +37,6 @@ deep link.
 ## Current limitations
 
 - native live video playback is not wired yet; the HLS ticket API is available;
-- playback currently exposes the API ticket URL to the native video layer only
-  after an explicit user action, and a dedicated video package will be chosen
-  when the live-media contract is finalized;
+- a dedicated native video package and HLS/WebRTC playback surface will be
+  chosen and verified when the Flutter SDK is available;
 - Flutter SDK verification is pending on the development machine.
