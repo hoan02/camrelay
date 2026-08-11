@@ -85,6 +85,9 @@ class CamrelayApi {
   Future<PlaybackTicket> playbackTicket(String id) async =>
       PlaybackTicket.fromJson(await _request('POST', '/api/v1/recordings/$id/playback-ticket'));
 
+  Future<LiveTicket> liveTicket(String id) async =>
+      LiveTicket.fromJson(await _request('POST', '/api/v1/cameras/$id/live-ticket'));
+
   Future<Map<String, dynamic>> _request(String method, String path) async {
     final token = await _secureStorage.read(key: _tokenKey);
     final headers = <String, String>{'accept': 'application/json'};

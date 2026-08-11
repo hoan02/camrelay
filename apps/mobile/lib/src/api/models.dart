@@ -80,13 +80,27 @@ class RecordingSummary {
 }
 
 class PlaybackTicket {
-  const PlaybackTicket({required this.url, required this.expiresAt});
+  const PlaybackTicket({required this.url, required this.expiresInSeconds});
 
   final String url;
-  final DateTime expiresAt;
+  final int expiresInSeconds;
 
   factory PlaybackTicket.fromJson(Map<String, dynamic> json) => PlaybackTicket(
         url: json['url'] as String? ?? '',
-        expiresAt: DateTime.tryParse(json['expires_at'] as String? ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        expiresInSeconds: (json['expires_in_seconds'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class LiveTicket {
+  const LiveTicket({required this.protocol, required this.url, required this.expiresInSeconds});
+
+  final String protocol;
+  final String url;
+  final int expiresInSeconds;
+
+  factory LiveTicket.fromJson(Map<String, dynamic> json) => LiveTicket(
+        protocol: json['protocol'] as String? ?? 'hls',
+        url: json['url'] as String? ?? '',
+        expiresInSeconds: (json['expires_in_seconds'] as num?)?.toInt() ?? 0,
       );
 }
