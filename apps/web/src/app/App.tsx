@@ -1,0 +1,109 @@
+import { useEffect, useState } from "react";
+import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { api, ApiError, Camera } from "../lib/api";
+
+type IconName = "grid" | "camera" | "archive" | "settings" | "info" | "plus" | "arrow" | "sun" | "moon" | "logout" | "menu";
+
+function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const paths: Record<IconName, JSX.Element> = {
+    grid: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
+    camera: <><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6H9l1.4-2h3.2L15 6h2.5A2.5 2.5 0 0 1 20 8.5v7A2.5 2.5 0 0 1 17.5 18h-11A2.5 2.5 0 0 1 4 15.5z" /><circle cx="12" cy="12" r="3" /></>,
+    archive: <><path d="M4 7h16v13H4z" /><path d="M3 4h18v3H3zM9 11h6" /></>,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.8 1.8 0 0 0 .4 2l.1.1-1.8 1.8-.1-.1a1.8 1.8 0 0 0-2-.4 1.8 1.8 0 0 0-1.1 1.7v.2h-2.6v-.2a1.8 1.8 0 0 0-1.1-1.7 1.8 1.8 0 0 0-2 .4l-.1.1-1.8-1.8.1-.1a1.8 1.8 0 0 0 .4-2 1.8 1.8 0 0 0-1.7-1.1H6v-2.6h.2a1.8 1.8 0 0 0 1.7-1.1 1.8 1.8 0 0 0-.4-2l-.1-.1 1.8-1.8.1.1a1.8 1.8 0 0 0 2 .4A1.8 1.8 0 0 0 12.4 5v-.2H15V5a1.8 1.8 0 0 0 1.1 1.7 1.8 1.8 0 0 0 2-.4l.1-.1L20 8l-.1.1a1.8 1.8 0 0 0-.4 2 1.8 1.8 0 0 0 1.7 1.1h.2v2.6h-.2a1.8 1.8 0 0 0-1.8 1.2Z" /></>,
+    info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>,
+    plus: <><path d="M12 5v14M5 12h14" /></>,
+    arrow: <><path d="M5 12h13M13 7l5 5-5 5" /></>,
+    sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
+    moon: <path d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.6 8.6 0 1 0 20.5 15.2Z" />,
+    logout: <><path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9" /></>,
+    menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
+  };
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+const navItems: Array<{ to: string; label: string; icon: IconName }> = [
+  { to: "/dashboard", label: "Dashboard", icon: "grid" },
+  { to: "/cameras", label: "Cameras", icon: "camera" },
+  { to: "/recordings", label: "Recordings", icon: "archive" },
+];
+
+export function App() {
+  return <Routes>
+    <Route path="/login" element={<Login />} />
+    <Route element={<ProtectedLayout />}>
+      <Route index element={<Navigate to="/dashboard" replace />} />
+      <Route path="dashboard" element={<Dashboard />} />
+      <Route path="cameras" element={<Cameras />} />
+      <Route path="recordings" element={<Placeholder title="Recordings" eyebrow="MEDIA LIBRARY" description="Timeline, retention, and cloud archive will live here." icon="archive" />} />
+      <Route path="settings" element={<Placeholder title="Settings" eyebrow="CONTROL PLANE" description="Identity, providers, storage, and notification policies are being separated into this workspace." icon="settings" />} />
+      <Route path="about" element={<Placeholder title="About Camrelay" eyebrow="SYSTEM NOTES" description="Technical architecture, security boundaries, and provider capability notes will be documented here." icon="info" />} />
+    </Route>
+    <Route path="*" element={<Navigate to="/dashboard" replace />} />
+  </Routes>;
+}
+
+function ProtectedLayout() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [theme, setTheme] = useState(() => window.localStorage.getItem("camrelay_theme") ?? "dark");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
+
+  useEffect(() => { document.documentElement.dataset.theme = theme; window.localStorage.setItem("camrelay_theme", theme); }, [theme]);
+  if (!window.localStorage.getItem("camrelay_access_token")) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+
+  const logout = () => { window.localStorage.removeItem("camrelay_access_token"); navigate("/login"); };
+  return <div className="app-shell">
+    <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
+      <div className="brand"><span className="brand-mark"><i /><i /><i /></span><span>camrelay</span></div>
+      <div className="sidebar-kicker">CONTROL PLANE</div>
+      <nav className="nav-list" aria-label="Primary navigation">
+        {navItems.map(item => <NavLink onClick={() => setMobileOpen(false)} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to={item.to} key={item.to}><Icon name={item.icon} /><span>{item.label}</span></NavLink>)}
+      </nav>
+      <div className="sidebar-bottom">
+        <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/settings"><Icon name="settings" /><span>Settings</span></NavLink>
+        <NavLink className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`} to="/about"><Icon name="info" /><span>About</span></NavLink>
+        <div className="profile-card"><span className="avatar">C</span><span className="profile-copy"><b>Camrelay admin</b><small>Local appliance</small></span><button className="icon-button subtle" onClick={logout} title="Sign out"><Icon name="logout" size={16} /></button></div>
+      </div>
+    </aside>
+    {mobileOpen && <button className="scrim" onClick={() => setMobileOpen(false)} aria-label="Close menu" />}
+    <main className="main-area">
+      <header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Icon name="menu" /></button><div className="crumb"><span>Camrelay</span><b>/</b><strong>{location.pathname.slice(1) || "dashboard"}</strong></div><div className="top-actions"><span className={`runtime-pill ${health.isError || health.data?.status === "degraded" ? "runtime-warning" : ""}`}><i /> {health.isLoading ? "Checking API" : health.isError ? "API unavailable" : "Relay ready"}</span><button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle theme"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button></div></header>
+      <div className="page-content"><Outlet /></div>
+    </main>
+  </div>;
+}
+
+function Login() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError(""); setBusy(true);
+    try { const result = await api.login(username, password); window.localStorage.setItem("camrelay_access_token", result.token); navigate((location.state as { from?: string } | null)?.from ?? "/dashboard", { replace: true }); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Camrelay API is not reachable."); }
+    finally { setBusy(false); }
+  };
+  return <div className="login-page"><div className="login-orbit orbit-a" /><div className="login-orbit orbit-b" /><div className="login-panel"><div className="brand login-brand"><span className="brand-mark"><i /><i /><i /></span><span>camrelay</span></div><div className="login-intro"><span className="eyebrow">PRIVATE CAMERA GATEWAY</span><h1>Bring every view<br /><em>back home.</em></h1><p>A calm control plane for remote cameras, local RTSP, and your own archive.</p></div><form onSubmit={submit} className="login-form"><label>Username<input autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} placeholder="Enter username" required /></label><label>Password<input autoComplete="current-password" type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter password" required /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={busy}>{busy ? "Connecting…" : "Enter console"}<Icon name="arrow" size={17} /></button></form><small className="login-note">Credentials stay on your Camrelay server.</small></div><div className="login-caption"><span>SELF-HOSTED / ENCRYPTED / YOURS</span><span>v1 foundation</span></div></div>;
+}
+
+function Dashboard() {
+  const { data: cameras, isLoading, isError } = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
+  const count = cameras?.length ?? 0;
+  return <><PageHeading eyebrow="OVERVIEW" title="Good to see you." description="One quiet place to watch the relay, cameras, and archive." action={<NavLink className="primary-button compact" to="/cameras"><Icon name="plus" size={16} />Add camera</NavLink>} /><section className="metric-grid"><Metric label="Cameras" value={isLoading ? "—" : String(count).padStart(2, "0")} detail={isError ? "API needs attention" : "Configured devices"} tone="signal" icon="camera" /><Metric label="Relay sessions" value="—" detail="Waiting for live telemetry" icon="grid" /><Metric label="Archive" value="—" detail="Recording index is migrating" icon="archive" /><Metric label="System" value="OK" detail="Console foundation" tone="amber" icon="settings" /></section><section className="dashboard-grid"><div className="panel signal-panel"><div className="panel-heading"><div><span className="eyebrow">RELAY SIGNAL</span><h2>Live topology</h2></div><span className="status-dot"><i />Ready</span></div><div className="topology"><div className="node"><span className="node-icon"><Icon name="camera" /></span><b>Remote cameras</b><small>Dahua / compatible P2P</small></div><div className="topology-line"><i /><i /><i /></div><div className="node emphasized"><span className="node-icon"><span className="brand-mark tiny"><i /><i /><i /></span></span><b>Camrelay core</b><small>Rust relay service</small></div><div className="topology-line muted"><i /><i /><i /></div><div className="node"><span className="node-icon"><Icon name="archive" /></span><b>Local media</b><small>RTSP / archive</small></div></div><div className="panel-foot"><span>{isError ? "Connect the API to load live camera telemetry." : "Live telemetry will appear as cameras are connected."}</span><NavLink to="/about" className="text-link">Read architecture <Icon name="arrow" size={15} /></NavLink></div></div><div className="panel activity-panel"><div className="panel-heading"><div><span className="eyebrow">RECENT ACTIVITY</span><h2>Nothing noisy.</h2></div><Icon name="info" size={17} /></div><div className="empty-state"><span className="empty-icon"><Icon name="archive" /></span><p>No events yet</p><small>Connection and recording events will surface here.</small></div></div></section></>;
+}
+
+function Cameras() {
+  const { data: cameras, isLoading, isError } = useQuery({ queryKey: ["cameras"], queryFn: api.cameras });
+  return <><PageHeading eyebrow="DEVICE FLEET" title="Cameras" description="Manage remote devices and the local relay endpoints that represent them." action={<button className="primary-button compact"><Icon name="plus" size={16} />Add camera</button>} />{isLoading && <div className="panel loading-panel">Loading camera inventory…</div>}{isError && <div className="panel empty-panel"><span className="empty-icon"><Icon name="camera" /></span><h2>Camera API is not connected</h2><p>The new console is ready for the versioned API. The legacy service can continue running while this boundary is migrated.</p></div>}{cameras && cameras.length === 0 && <div className="panel empty-panel"><span className="empty-icon"><Icon name="camera" /></span><h2>Your fleet is empty</h2><p>Add the first camera when the provider and credential migration is ready.</p><button className="secondary-button"><Icon name="plus" size={15} />Add first camera</button></div>}{cameras && cameras.length > 0 && <div className="camera-grid">{cameras.map(camera => <CameraCard key={camera.id} camera={camera} />)}</div>}</>;
+}
+
+function CameraCard({ camera }: { camera: Camera }) { return <article className="camera-card"><div className="camera-preview"><span className="preview-label">NO LIVE PREVIEW</span><span className="preview-grid" /></div><div className="camera-body"><div className="camera-title"><span className="camera-status" /><div><h3>{camera.name}</h3><small>{camera.brand} · {camera.serial}</small></div><button className="icon-button subtle" title="Camera actions">•••</button></div><div className="camera-meta"><span>RTSP :{camera.local_port}</span><span>{camera.auto_start ? "Auto-start" : "Manual start"}</span></div></div></article>; }
+
+function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) { return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>; }
+function Metric({ label, value, detail, icon, tone = "default" }: { label: string; value: string; detail: string; icon: IconName; tone?: string }) { return <div className={`metric-card ${tone}`}><div className="metric-icon"><Icon name={icon} size={17} /></div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>; }
+function Placeholder({ title, eyebrow, description, icon }: { title: string; eyebrow: string; description: string; icon: IconName }) { return <><PageHeading eyebrow={eyebrow} title={title} description={description} /><div className="panel empty-panel"><span className="empty-icon"><Icon name={icon} /></span><h2>Workspace boundary ready</h2><p>This route is intentionally present now so deep links and future clients have a stable information architecture.</p></div></>; }

@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/camrelay-contract", "crates/camrelay-storage"]
+resolver = "2"
+
 [package]
 name = "camrelay"
 version = "0.1.0"
@@ -6,6 +10,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+camrelay-contract = { path = "crates/camrelay-contract" }
+camrelay-storage = { path = "crates/camrelay-storage" }
 async-trait = "0.1.74"
 axum = "0.7"
 base64 = "0.21.5"

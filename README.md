@@ -4,6 +4,15 @@ Self-hosted P2P camera relay written in Rust. `camrelay` exposes an authorized r
 
 The project currently contains a multi-camera manager, a web dashboard, a REST API, JSON-backed configuration, and a Dahua P2P/PTCP tunnel implementation. Compatibility with a specific vendor, model, firmware, or cloud app must be verified against a real device; this repository does not claim IMOU compatibility without a successful source-level or live-device test.
 
+## v1 foundation status
+
+The `v1-foundation` branch is an incremental migration from the known `prototype-v0.1` relay baseline. The existing Rust binary and `static/` console remain the compatibility path while the new boundaries are built:
+
+- Rust is now a Cargo workspace with a transport-independent `camrelay-contract` crate.
+- `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, and an API client.
+- `packages/design-tokens` is the first shared visual language seam for the future web and mobile clients.
+- The new console is not served by the Rust binary yet; run it separately during development. The legacy console stays in place until feature parity and migration tests pass.
+
 ## Overview
 
 The service connects to a camera through a configured P2P cloud endpoint, establishes a PTCP session, and listens on a local TCP port. RTSP clients connect to that local port using the camera's normal RTSP path.
@@ -101,6 +110,27 @@ The web manager has these browser routes:
 | `/about` | Architecture, protocol, security, and compatibility notes. |
 
 Because routes are real paths, refreshing `/cameras` or `/providers` keeps that page selected.
+
+### New React console (development)
+
+Run the Rust service in one terminal, then start the new console from the repository root in another:
+
+```bash
+npm install
+npm run web:dev
+```
+
+Open `http://127.0.0.1:5173/login`. Vite proxies `/api` to the Rust service on port `8080`. This console is the v1 migration surface; it currently exposes the dashboard and camera workspace foundation while the legacy routes remain the complete operational UI.
+
+To serve the built console from the Rust binary after feature parity checks:
+
+```bash
+npm run web:build
+# set web_root in config.json to "apps/web/dist"
+cargo run --release
+```
+
+Leave `web_root` as `static` to roll back to the legacy console.
 
 The service reads JSON files from its current working directory. Missing `config.json` falls back to the built-in admin/port defaults; brands, cameras, and tokens fall back to empty lists.
 
@@ -211,7 +241,9 @@ Enable recording in config.json:
       "archive_remote": "gdrive:camrelay-archive",
       "archive_root": "camrelay-archive",
       "archive_poll_seconds": 15,
-      "local_retention_days": 0
+      "local_retention_days": 0,
+      "database_enabled": false,
+      "database_path": "camrelay.sqlite"
     }
 
 Install FFmpeg and make sure ffmpeg is on PATH, or set an absolute ffmpeg_path. The recorder starts only while the camera tunnel is running. It writes one MP4 segment per camera and indexes a segment after it has been closed.
@@ -225,6 +257,8 @@ For Google Drive, configure an rclone remote locally:
 Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically.
 
 The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
+
+The SQLite v1 foundation is opt-in for now. Set `database_enabled` to `true` to create the configured database, apply SQLx migrations, and import any legacy JSON files idempotently. Before enabling it when providers or cameras exist, set `CAMRELAY_SECRET_KEY` to a base64-encoded 32-byte key (see `.env.example`). User passwords are Argon2id hashes; provider and camera secrets are encrypted with ChaCha20-Poly1305 and the master key must be backed up separately. Existing JSON handlers remain authoritative until the migration plan's API parity and rollback gates pass. The database file is ignored by Git.
 
 For a first test, leave archive_enabled false, enable recording, start one camera, wait for one segment to close, and open /recordings. Then configure rclone and archive the same segment.
 

@@ -23,6 +23,14 @@
 
 ## First endpoint set
 
+Implemented in the current migration checkpoint:
+
+    GET    /api/v1/health                 public migration health
+    GET    /api/v1/cameras                authenticated, secret-free summaries
+
+The endpoints below are the target contract and remain pending until their
+storage and authorization behavior is migrated from the legacy handlers:
+
     POST   /api/v1/auth/login
     POST   /api/v1/auth/refresh
     POST   /api/v1/auth/logout

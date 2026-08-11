@@ -8,7 +8,7 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 
-use crate::ptcp::{PTCPBody, PTCPEvent, PTCPPayload, PTCPSession, PTCP};
+use crate::ptcp::{PTCPBody, PTCPEvent, PTCPPayload, PTCPSession, Ptcp};
 
 /**
  * Read data from the channel and write it back to the client

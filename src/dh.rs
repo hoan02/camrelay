@@ -5,7 +5,7 @@ use std::{collections::HashMap, net::SocketAddrV4};
 use tokio::{net::UdpSocket, time};
 use xml::reader::{EventReader, XmlEvent};
 
-use crate::ptcp::{PTCPBody, PTCPSession, PTCP};
+use crate::ptcp::{PTCPBody, PTCPSession, Ptcp};
 
 /// Performs only the provider-level DH probe. This validates that the configured
 /// endpoint accepts the supplied platform credentials; it does not connect to
@@ -260,7 +260,7 @@ pub async fn p2p_handshake(
         b"\x7f\xd5\xff\xf7".to_vec(),
         cid.clone(),
         b"\xff\xfb\xff\xf7\xff\xfe".to_vec(),
-        ip_to_bytes(&device),
+        ip_to_bytes(device),
     ]
     .concat();
     println!(
@@ -307,7 +307,7 @@ pub async fn p2p_handshake(
         b"\x7f\xd6\xff\xf7".to_vec(),
         cid.clone(),
         b"\xff\xfb\xff\xf7\xff\xfe".to_vec(),
-        ip_to_bytes(&device_laddr),
+        ip_to_bytes(device_laddr),
     ]
     .concat();
     println!(
@@ -487,10 +487,7 @@ impl DHP2P for UdpSocket {
             None => "DHGET",
         };
 
-        let body = match body {
-            Some(s) => s,
-            None => "",
-        };
+        let body = body.unwrap_or_default();
 
         let nonce = rand::random::<u32>();
         let currdate = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -499,7 +496,7 @@ impl DHP2P for UdpSocket {
         let mut hasher = sha1::Sha1::new();
         hasher.update(pwd);
         let hash_digest = hasher.finalize();
-        let digest = base64::engine::general_purpose::STANDARD.encode(&hash_digest);
+        let digest = base64::engine::general_purpose::STANDARD.encode(hash_digest);
 
         *seq += 1;
 

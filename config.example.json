@@ -2,6 +2,7 @@
   "username": "admin",
   "password": "change-me",
   "web_port": 8080,
+  "web_root": "static",
   "recordings_enabled": false,
   "recordings_dir": "recordings",
   "recordings_index": "recordings.json",
@@ -11,5 +12,7 @@
   "archive_remote": "gdrive:camrelay-archive",
   "archive_root": "camrelay-archive",
   "archive_poll_seconds": 15,
-  "local_retention_days": 0
+  "local_retention_days": 0,
+  "database_enabled": false,
+  "database_path": "camrelay.sqlite"
 }

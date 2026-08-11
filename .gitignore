@@ -3,6 +3,12 @@
 *.exe
 *.pdb
 
+# Web dependencies and build output
+node_modules/
+**/node_modules/
+apps/web/dist/
+*.tsbuildinfo
+
 # Runtime configuration and credentials
 # Keep sanitized *.example.json files in Git instead.
 config.json

@@ -1,9 +1,11 @@
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::config::AppConfig;
 use crate::recordings::{archive_poll_interval, RecordingManager};
 use crate::tunnel::TunnelManager;
 use crate::web::{create_router, AppState};
+use camrelay_storage::Storage;
 
 mod config;
 mod dh;
@@ -20,6 +22,32 @@ async fn main() {
 
     let tunnel_manager = Arc::new(TunnelManager::new());
     let recording_manager = RecordingManager::new(config.clone());
+
+    let storage = if config.database_enabled {
+        match Storage::open(&config.database_path).await {
+            Ok(storage) => {
+                if Path::new("config.json").exists() {
+                    match Storage::load_legacy_snapshot(".") {
+                        Ok(snapshot) => match storage.import_legacy(&snapshot).await {
+                            Ok(report) => println!(
+                                "Imported legacy JSON: users={}, providers={}, cameras={}, tokens={}",
+                                report.users, report.providers, report.cameras, report.tokens
+                            ),
+                            Err(error) => eprintln!("Legacy JSON import failed: {error}"),
+                        },
+                        Err(error) => eprintln!("Could not read legacy JSON for import: {error}"),
+                    }
+                }
+                Some(storage)
+            }
+            Err(error) => {
+                eprintln!("SQLite storage disabled after startup error: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Auto-start cameras
     for camera in crate::config::load_cameras()
@@ -49,6 +77,7 @@ async fn main() {
         tunnel_manager,
         recording_manager,
         playback_tickets: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        storage,
     };
 
     let app = create_router(state);

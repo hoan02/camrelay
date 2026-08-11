@@ -44,7 +44,7 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 ## Security and persistence
 
 - The server is the only component allowed to read vendor and camera credentials.
-- Passwords use Argon2id. Refresh sessions are server-side and revocable.
+- User passwords use Argon2id. Provider/device secrets use an encrypted envelope keyed by `CAMRELAY_SECRET_KEY`; the key is never stored in SQLite or the repository. Refresh sessions are server-side and revocable.
 - Web uses secure HttpOnly session cookies. Mobile uses short-lived access tokens and refresh tokens in platform secure storage.
 - A live/playback URL is a short-lived ticket scoped to one user and camera/recording.
 - SQLite in WAL mode is the default single-appliance database. SQLx migrations are the schema truth.
@@ -57,3 +57,7 @@ v1 remains a modular monolith: one deployable Rust service plus purpose-built me
 - API responses are versioned under /api/v1.
 - OpenAPI is a release contract for web and mobile clients.
 - The legacy static console stays until the React Console reaches feature parity.
+
+## Current migration checkpoint
+
+The repository is intentionally in a dual-surface phase. The root `camrelay` package still owns the working relay binary and JSON-backed handlers. `camrelay-contract` and `apps/web` are compiled/tested independently so API and UI contracts can evolve without taking the known P2P/PTCP path offline. Database-backed persistence, versioned handlers, and serving the React build are subsequent migration gates; they are not represented as completed features yet.

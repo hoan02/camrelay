@@ -19,12 +19,20 @@ fn default_archive_root() -> String {
 fn default_archive_poll_seconds() -> u64 {
     15
 }
+fn default_database_path() -> String {
+    "camrelay.sqlite".to_string()
+}
+fn default_web_root() -> String {
+    "static".to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub username: String,
     pub password: String,
     pub web_port: u16,
+    #[serde(default = "default_web_root")]
+    pub web_root: String,
     #[serde(default)]
     pub recordings_enabled: bool,
     #[serde(default = "default_recordings_dir")]
@@ -45,6 +53,10 @@ pub struct AppConfig {
     pub archive_poll_seconds: u64,
     #[serde(default)]
     pub local_retention_days: u32,
+    #[serde(default)]
+    pub database_enabled: bool,
+    #[serde(default = "default_database_path")]
+    pub database_path: String,
 }
 
 impl Default for AppConfig {
@@ -53,6 +65,7 @@ impl Default for AppConfig {
             username: "admin".to_string(),
             password: "admin".to_string(),
             web_port: 8080,
+            web_root: default_web_root(),
             recordings_enabled: false,
             recordings_dir: default_recordings_dir(),
             recordings_index: default_recordings_index(),
@@ -63,6 +76,8 @@ impl Default for AppConfig {
             archive_root: default_archive_root(),
             archive_poll_seconds: default_archive_poll_seconds(),
             local_retention_days: 0,
+            database_enabled: false,
+            database_path: default_database_path(),
         }
     }
 }

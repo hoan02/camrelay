@@ -7,7 +7,6 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use chrono;
 use serde::{Deserialize, Serialize};
 use std::{
     path::Path as FsPath,
@@ -24,6 +23,9 @@ use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
+use camrelay_contract::{CameraSummary, API_VERSION};
+use camrelay_storage::Storage;
+
 use crate::config::{
     load_brands, load_cameras, load_tokens, save_brands, save_cameras, save_tokens, ApiToken,
     AppConfig, Brand, Camera,
@@ -39,6 +41,7 @@ pub struct AppState {
     pub tunnel_manager: Arc<TunnelManager>,
     pub recording_manager: RecordingManager,
     pub playback_tickets: Arc<Mutex<std::collections::HashMap<String, PlaybackGrant>>>,
+    pub storage: Option<Storage>,
 }
 
 #[derive(Clone)]
@@ -98,7 +101,16 @@ struct LoginResponse {
 }
 
 async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) -> impl IntoResponse {
-    if body.username == state.config.username && body.password == state.config.password {
+    let database_authenticated = match &state.storage {
+        Some(storage) => storage
+            .verify_user(&body.username, &body.password)
+            .await
+            .unwrap_or(false),
+        None => false,
+    };
+    if database_authenticated
+        || (body.username == state.config.username && body.password == state.config.password)
+    {
         let token = Uuid::new_v4().to_string();
         state.sessions.lock().unwrap().push(token.clone());
         (StatusCode::OK, Json(LoginResponse { token })).into_response()
@@ -109,6 +121,68 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
         )
             .into_response()
     }
+}
+
+async fn v1_health(State(state): State<AppState>) -> impl IntoResponse {
+    let (storage, storage_ok, camera_count) = match &state.storage {
+        Some(storage) => match storage.health_check().await {
+            Ok(()) => (
+                "sqlite",
+                true,
+                storage.camera_count().await.unwrap_or_default(),
+            ),
+            Err(_) => ("sqlite", false, 0),
+        },
+        None => ("legacy_json", true, load_cameras().len() as i64),
+    };
+    let status = if storage_ok { "ok" } else { "degraded" };
+    Json(serde_json::json!({
+        "api_version": API_VERSION,
+        "status": status,
+        "storage": storage,
+        "camera_count": camera_count,
+    }))
+}
+
+async fn get_v1_cameras(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.list_cameras().await {
+            Ok(cameras) => Json(
+                cameras
+                    .into_iter()
+                    .map(|camera| CameraSummary {
+                        id: camera.id,
+                        name: camera.name,
+                        brand: camera.brand,
+                        serial: camera.serial,
+                        local_port: camera.local_port,
+                        auto_start: camera.auto_start,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(
+        load_cameras()
+            .into_iter()
+            .map(|camera| CameraSummary {
+                id: camera.id,
+                name: camera.name,
+                brand: camera.brand,
+                serial: camera.serial,
+                local_port: camera.local_port,
+                auto_start: camera.auto_start,
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
 }
 
 /* ─── Brand handlers ─── */
@@ -647,6 +721,8 @@ async fn stream_recording_handler(
 }
 
 pub fn create_router(state: AppState) -> Router {
+    let web_root = state.config.web_root.clone();
+    let web_index = format!("{web_root}/index.html");
     let protected = Router::new()
         .route(
             "/brands",
@@ -691,13 +767,21 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             playback_auth_middleware,
         ));
+    let v1_public = Router::new().route("/health", get(v1_health));
+    let v1_protected =
+        Router::new()
+            .route("/cameras", get(get_v1_cameras))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ));
 
     Router::new()
         .nest("/api", protected)
         .nest("/api", login_router)
         .nest("/api", playback_router)
-        .fallback_service(
-            ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")),
-        )
+        .nest("/api/v1", v1_public)
+        .nest("/api/v1", v1_protected)
+        .fallback_service(ServeDir::new(web_root).not_found_service(ServeFile::new(web_index)))
         .with_state(state)
 }

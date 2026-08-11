@@ -1,0 +1,14 @@
+.git
+.github
+target
+node_modules
+**/node_modules
+apps/web/dist
+config.json
+brands.json
+cameras.json
+tokens.json
+*.sqlite
+recordings
+recordings.json
+*.log

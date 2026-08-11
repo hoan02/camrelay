@@ -122,7 +122,7 @@ impl std::fmt::Debug for PTCPPacket {
 
 impl PTCPBody {
     fn parse(data: &[u8]) -> PTCPBody {
-        if data.len() == 0 {
+        if data.is_empty() {
             return PTCPBody::Empty;
         }
 
@@ -290,13 +290,13 @@ impl PTCPSession {
 }
 
 #[async_trait]
-pub trait PTCP {
+pub trait Ptcp {
     async fn ptcp_request(&self, packet: PTCPPacket);
     async fn ptcp_read(&self) -> PTCPPacket;
 }
 
 #[async_trait]
-impl PTCP for UdpSocket {
+impl Ptcp for UdpSocket {
     async fn ptcp_request(&self, packet: PTCPPacket) {
         println!(">>> {}", self.peer_addr().unwrap());
         println!("{:?}", packet);
