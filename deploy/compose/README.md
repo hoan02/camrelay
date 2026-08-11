@@ -19,3 +19,28 @@ The image contains both web builds. Set `web_root` to
 `/opt/camrelay/apps/web/dist` in `data/config.json` only after the React
 console has passed feature-parity checks; leave it as `static` to use the
 legacy console.
+
+## Backup and restore
+
+Stop the service before taking a filesystem backup so the SQLite file and
+recording index are consistent:
+
+```powershell
+docker compose stop camrelay
+./backup.ps1
+docker compose start camrelay
+```
+
+The script writes a timestamped directory under `backups/` with a SHA-256
+manifest. It does not copy `CAMRELAY_SECRET_KEY` or the rclone credential;
+store those separately in the deployment secret store. To restore, stop the
+service and run:
+
+```powershell
+docker compose stop camrelay
+./restore.ps1 -BackupPath ./backups/YYYYMMDD-HHMMSS
+docker compose start camrelay
+```
+
+Restore is intentionally explicit and overwrites files listed in the backup
+manifest only.

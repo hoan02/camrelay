@@ -31,6 +31,11 @@ tokens.local.json
 /recordings/
 recordings.json
 
+# Local deployment state and backup output
+/deploy/compose/data/
+/deploy/compose/backups/
+/deploy/compose/.env
+
 # IDE and operating-system files
 .idea/
 .vscode/

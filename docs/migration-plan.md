@@ -9,10 +9,19 @@
 
 ## JSON to SQLite
 
-The first v1 startup detects legacy config.json, brands.json, cameras.json, tokens.json, and recordings.json.
+The first v1 startup detects legacy config.json, brands.json, cameras.json, and
+tokens.json and imports them idempotently when SQLite mode is enabled. Provider,
+camera, and token secrets require `CAMRELAY_SECRET_KEY` and are encrypted before
+being stored. The migration marker prevents duplicate user/import work, while
+upserts keep repeated legacy snapshots convergent.
 
-- Read-only dry-run reports what will be imported.
-- Import creates a timestamped backup next to the legacy files.
+The current startup path does not silently create a legacy-file backup or offer a
+dry-run flag. Take an explicit deployment backup with
+`deploy/compose/backup.ps1` (or an equivalent stopped-service filesystem
+snapshot) before enabling SQLite. A future migration command will add a
+read-only preview and automatic timestamped backup.
+
+- Backup and restore are explicit deployment operations.
 - IDs are preserved where possible.
 - Passwords, platform keys, and tokens move to the secret/session model.
 - A migration marker prevents duplicate imports.
