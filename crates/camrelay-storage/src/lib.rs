@@ -14,6 +14,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{fs, path::Path};
 use thiserror::Error;
@@ -216,6 +217,86 @@ impl Storage {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn create_session(
+        &self,
+        token: &str,
+        username: &str,
+        role: &str,
+        expires_at: i64,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            "INSERT INTO auth_sessions (token_hash, username, role, expires_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(hash_session_token(token))
+        .bind(username)
+        .bind(role)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn find_session(
+        &self,
+        token: &str,
+        now: i64,
+    ) -> Result<Option<StoredSession>, StorageError> {
+        let row = sqlx::query(
+            "SELECT username, role, expires_at FROM auth_sessions WHERE token_hash = ? AND expires_at > ?",
+        )
+        .bind(hash_session_token(token))
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(StoredSession {
+                username: row.try_get("username")?,
+                role: row.try_get("role")?,
+                expires_at: row.try_get("expires_at")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn delete_session(&self, token: &str) -> Result<(), StorageError> {
+        sqlx::query("DELETE FROM auth_sessions WHERE token_hash = ?")
+            .bind(hash_session_token(token))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn rotate_session(
+        &self,
+        old_token: &str,
+        new_token: &str,
+        username: &str,
+        role: &str,
+        expires_at: i64,
+    ) -> Result<bool, StorageError> {
+        let mut transaction = self.pool.begin().await?;
+        let deleted = sqlx::query("DELETE FROM auth_sessions WHERE token_hash = ?")
+            .bind(hash_session_token(old_token))
+            .execute(&mut *transaction)
+            .await?
+            .rows_affected();
+        if deleted == 0 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO auth_sessions (token_hash, username, role, expires_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(hash_session_token(new_token))
+        .bind(username)
+        .bind(role)
+        .bind(expires_at)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
     }
 
     pub async fn import_legacy(
@@ -591,6 +672,13 @@ pub struct StoredUser {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredSession {
+    pub username: String,
+    pub role: String,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredProvider {
     pub id: String,
     pub name: String,
@@ -618,6 +706,10 @@ fn decode_secret_key(value: &str) -> Result<[u8; 32], StorageError> {
     decoded
         .try_into()
         .map_err(|_| StorageError::InvalidSecretKey)
+}
+
+fn hash_session_token(token: &str) -> String {
+    STANDARD.encode(Sha256::digest(token.as_bytes()))
 }
 
 pub fn hash_password(password: &str) -> Result<String, StorageError> {
@@ -730,6 +822,59 @@ mod tests {
             .verify_user("admin", "change-me")
             .await
             .expect("user verification"));
+
+        drop(storage);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn session_tokens_are_hashed_and_rotated() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("camrelay-session-{suffix}.sqlite"));
+        let storage = Storage::open_with_secret_key(&path, None)
+            .await
+            .expect("database should open");
+        storage
+            .create_session("session-one", "owner", "owner", 2_000_000_000)
+            .await
+            .expect("session should persist");
+        let stored_hash: String = sqlx::query_scalar("SELECT token_hash FROM auth_sessions")
+            .fetch_one(&storage.pool)
+            .await
+            .expect("hashed token should exist");
+        assert_ne!(stored_hash, "session-one");
+        assert_eq!(
+            storage
+                .find_session("session-one", 1_000_000_000)
+                .await
+                .expect("session lookup")
+                .expect("session should be valid")
+                .username,
+            "owner"
+        );
+        assert!(storage
+            .rotate_session(
+                "session-one",
+                "session-two",
+                "owner",
+                "owner",
+                2_000_000_000
+            )
+            .await
+            .expect("rotation should succeed"));
+        assert!(storage
+            .find_session("session-one", 1_000_000_000)
+            .await
+            .expect("old lookup")
+            .is_none());
+        assert!(storage
+            .find_session("session-two", 1_000_000_000)
+            .await
+            .expect("new lookup")
+            .is_some());
 
         drop(storage);
         let _ = std::fs::remove_file(path);

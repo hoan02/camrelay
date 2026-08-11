@@ -110,6 +110,25 @@ async fn authenticate_token(state: &AppState, token: &str) -> Option<AuthPrincip
         return Some(principal);
     }
 
+    if let Some(storage) = &state.storage {
+        if let Ok(Some(session)) = storage
+            .find_session(token, chrono::Utc::now().timestamp())
+            .await
+        {
+            let principal = AuthPrincipal {
+                username: session.username,
+                role: session.role,
+                auth_type: "session".to_string(),
+            };
+            state
+                .sessions
+                .lock()
+                .unwrap()
+                .insert(token.to_string(), principal.clone());
+            return Some(principal);
+        }
+    }
+
     let valid = match &state.storage {
         Some(storage) => storage
             .list_api_tokens()
@@ -193,15 +212,33 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
     };
     if authenticated {
         let token = Uuid::new_v4().to_string();
+        let username = body.username.clone();
+        let expires_at = chrono::Utc::now().timestamp() + 86_400;
+        if let Some(storage) = &state.storage {
+            if let Err(error) = storage
+                .create_session(&token, &username, &role, expires_at)
+                .await
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "code": "auth.session_unavailable",
+                        "message": error.to_string()
+                    })),
+                )
+                    .into_response();
+            }
+        }
         state.sessions.lock().unwrap().insert(
             token.clone(),
             AuthPrincipal {
-                username: body.username,
+                username,
                 role,
                 auth_type: "session".to_string(),
             },
         );
-        let cookie = format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/");
+        let cookie =
+            format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400");
         (
             StatusCode::OK,
             [(header::SET_COOKIE, cookie)],
@@ -220,6 +257,9 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(token) = session_token(&headers) {
         state.sessions.lock().unwrap().remove(&token);
+        if let Some(storage) = &state.storage {
+            let _ = storage.delete_session(&token).await;
+        }
     }
     (
         StatusCode::NO_CONTENT,
@@ -231,16 +271,46 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoR
         .into_response()
 }
 
-async fn refresh_session(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+async fn refresh_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(old_token) = session_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let mut sessions = state.sessions.lock().unwrap();
-    let Some(principal) = sessions.remove(&old_token) else {
+    let Some(principal) = authenticate_token(&state, &old_token).await else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
     let token = Uuid::new_v4().to_string();
-    sessions.insert(token.clone(), principal);
+    let expires_at = chrono::Utc::now().timestamp() + 86_400;
+    if let Some(storage) = &state.storage {
+        match storage
+            .rotate_session(
+                &old_token,
+                &token,
+                &principal.username,
+                &principal.role,
+                expires_at,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "code": "auth.session_unavailable",
+                        "message": error.to_string()
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    state.sessions.lock().unwrap().remove(&old_token);
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .insert(token.clone(), principal);
     let cookie = format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400");
     (
         StatusCode::OK,
