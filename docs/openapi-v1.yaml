@@ -291,6 +291,16 @@ paths:
   /api/v1/recordings:
     get:
       summary: List recording summaries
+      parameters:
+        - name: camera_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
       responses:
         '200':
           description: Recording summaries

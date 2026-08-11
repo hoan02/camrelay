@@ -138,7 +138,13 @@ export const api = {
   updateCamera: (id: string, input: Partial<CameraInput>) => request<Camera>(`/api/v1/cameras/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteCamera: (id: string) => request<void>(`/api/v1/cameras/${id}`, { method: "DELETE" }),
   health: () => request<Health>("/api/v1/health"),
-  recordings: () => request<Recording[]>("/api/v1/recordings"),
+  recordings: (filters: { camera_id?: string; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (filters.camera_id) params.set("camera_id", filters.camera_id);
+    if (filters.status) params.set("status", filters.status);
+    const query = params.toString();
+    return request<Recording[]>(`/api/v1/recordings${query ? `?${query}` : ""}`);
+  },
   playbackTicket: (id: string) => request<PlaybackTicket>(`/api/v1/recordings/${id}/playback-ticket`, { method: "POST" }),
   archiveRecording: (id: string) => request<Recording>(`/api/v1/recordings/${id}/archive`, { method: "POST" }),
   providers: () => request<Provider[]>("/api/v1/providers"),

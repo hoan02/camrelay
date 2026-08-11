@@ -369,7 +369,7 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 Completed in the v1 foundation:
 
 - versioned API contract, SQLite persistence, encrypted device/provider secrets, auth sessions, RBAC, token management, readiness, and CRUD;
-- React console routes for dashboard, cameras, providers, recordings, tokens, settings, audit history, and technical notes;
+- React console routes for dashboard/live wall, cameras, providers, filtered recordings/timeline, tokens, settings, audit history, and technical notes;
 - local recording playback tickets, Range streaming, archive actions, privacy-safe audit history, backup/restore scripts, and Compose configuration.
 
 Next, in order:

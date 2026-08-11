@@ -31,7 +31,7 @@ Implemented in the current migration checkpoint:
     POST   /api/v1/cameras                authenticated camera onboarding
     GET    /api/v1/providers               authenticated, secret-free summaries
     POST   /api/v1/providers               authenticated provider onboarding
-    GET    /api/v1/recordings              authenticated, secret-free summaries
+    GET    /api/v1/recordings              authenticated summaries; optional camera_id/status/limit filters
     GET    /api/v1/recordings/{recording_id} authenticated, secret-free detail
     POST   /api/v1/recordings/{recording_id}/playback-ticket
     POST   /api/v1/recordings/{recording_id}/archive
