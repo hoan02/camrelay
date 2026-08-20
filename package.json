@@ -1,0 +1,16 @@
+{
+  "name": "camrelay",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "packages/design-tokens"
+  ],
+  "scripts": {
+    "web:dev": "npm --workspace @camrelay/web run dev",
+    "web:build": "npm --workspace @camrelay/web run build",
+    "web:typecheck": "npm --workspace @camrelay/web run typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

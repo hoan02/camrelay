@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'owner',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS providers (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    main_server TEXT NOT NULL,
+    app_username TEXT NOT NULL,
+    app_userkey TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cameras (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    brand TEXT NOT NULL,
+    serial TEXT NOT NULL,
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
+    remote_port INTEGER NOT NULL,
+    local_port INTEGER NOT NULL UNIQUE,
+    auto_start INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    token TEXT NOT NULL,
+    expires_at TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS migration_meta (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);

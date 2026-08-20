@@ -1,15 +1,20 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    extract::{Extension, OriginalUri, Path, Query, Request, State},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
-    routing::{get, post, put},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
+    routing::{get, patch, post, put},
     Json, Router,
 };
-use chrono;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
+    convert::Infallible,
     path::Path as FsPath,
     process::Stdio,
     sync::{Arc, Mutex},
@@ -24,21 +29,40 @@ use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
+use camrelay_contract::{
+    ApiTokenSummary, AuditEventSummary, CameraSummary, EventSummary, ProviderSummary,
+    RecordingSummary, UserSummary, API_VERSION,
+};
+use camrelay_storage::{LegacyCamera, Storage, StoredCameraConfig, StoredProviderConfig};
+
 use crate::config::{
     load_brands, load_cameras, load_tokens, save_brands, save_cameras, save_tokens, ApiToken,
     AppConfig, Brand, Camera,
 };
 use crate::dh::probe_provider;
-use crate::recordings::RecordingManager;
+use crate::live::LiveManager;
+use crate::recordings::{Recording, RecordingManager};
 use crate::tunnel::{TunnelManager, TunnelStatus};
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: AppConfig,
-    pub sessions: Arc<Mutex<Vec<String>>>,
+    pub sessions: Arc<Mutex<HashMap<String, AuthPrincipal>>>,
     pub tunnel_manager: Arc<TunnelManager>,
+    pub live_manager: LiveManager,
+    pub live_tickets: Arc<Mutex<HashMap<String, LiveGrant>>>,
+    pub webrtc_client: reqwest::Client,
+    pub webrtc_sessions: Arc<Mutex<HashMap<String, WebRtcSession>>>,
     pub recording_manager: RecordingManager,
     pub playback_tickets: Arc<Mutex<std::collections::HashMap<String, PlaybackGrant>>>,
+    pub storage: Option<Storage>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AuthPrincipal {
+    pub username: String,
+    pub role: String,
+    pub auth_type: String,
 }
 
 #[derive(Clone)]
@@ -47,41 +71,180 @@ pub struct PlaybackGrant {
     pub expires_at: Instant,
 }
 
-async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let token = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+#[derive(Clone)]
+pub struct LiveGrant {
+    pub camera_id: String,
+    pub expires_at: Instant,
+}
 
-    if let Some(t) = token {
-        if state.sessions.lock().unwrap().contains(&t) {
-            return next.run(req).await;
+#[derive(Clone)]
+pub struct WebRtcSession {
+    pub ticket: String,
+    pub remote_path: String,
+    pub expires_at: Instant,
+}
+
+const MEDIAMTX_WHEP_BASE_URL: &str = "http://mediamtx:8889";
+const MAX_WHEP_SDP_BYTES: usize = 4 * 1024 * 1024;
+
+async fn auth_middleware(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let Some(token) = session_token(req.headers()) else {
+        return unauthorized_response();
+    };
+    let Some(principal) = authenticate_token(&state, &token).await else {
+        return unauthorized_response();
+    };
+
+    let request_path = req
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.0.path().to_owned())
+        .unwrap_or_else(|| req.uri().path().to_owned());
+    let scoped_ticket_request = req.method() == Method::POST
+        && (req.uri().path().ends_with("/playback-ticket")
+            || req.uri().path().ends_with("/live-ticket"));
+    if req.method() == Method::GET
+        && legacy_secret_read_path(&request_path)
+        && !is_admin_role(&principal.role)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "auth.forbidden",
+                "message": "Only an owner or admin can read legacy credential fields."
+            })),
+        )
+            .into_response();
+    }
+    if !matches!(
+        req.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) && !is_admin_role(&principal.role)
+        && !scoped_ticket_request
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "auth.forbidden",
+                "message": "This operation requires an owner or admin role."
+            })),
+        )
+            .into_response();
+    }
+
+    req.extensions_mut().insert(principal.clone());
+    let method = req.method().clone();
+    let response = next.run(req).await;
+    if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        if let Some(storage) = &state.storage {
+            let _ = storage
+                .record_audit(
+                    &principal.username,
+                    method.as_str(),
+                    &request_path,
+                    response.status().as_u16(),
+                )
+                .await;
         }
+    }
+    response
+}
 
-        let now = chrono::Utc::now();
-        let valid = load_tokens().into_iter().any(|at| {
-            at.token == t
-                && at.enabled
-                && match at.expires_at {
-                    None => true,
-                    Some(exp) => chrono::DateTime::parse_from_rfc3339(&exp)
-                        .map(|dt| dt.with_timezone(&chrono::Utc) > now)
-                        .unwrap_or(false),
-                }
-        });
+fn unauthorized_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "code": "auth.unauthorized",
+            "message": "Authentication is required."
+        })),
+    )
+        .into_response()
+}
 
-        if valid {
-            return next.run(req).await;
+fn is_admin_role(role: &str) -> bool {
+    matches!(role, "owner" | "admin")
+}
+
+fn legacy_secret_read_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/brands"
+            | "/api/cameras"
+            | "/api/cameras/all"
+            | "/api/tokens"
+            | "/brands"
+            | "/cameras"
+            | "/cameras/all"
+            | "/tokens"
+    )
+}
+
+async fn authenticate_token(state: &AppState, token: &str) -> Option<AuthPrincipal> {
+    if let Some(principal) = state.sessions.lock().unwrap().get(token).cloned() {
+        return Some(principal);
+    }
+
+    if let Some(storage) = &state.storage {
+        if let Ok(Some(session)) = storage
+            .find_session(token, chrono::Utc::now().timestamp())
+            .await
+        {
+            let principal = AuthPrincipal {
+                username: session.username,
+                role: session.role,
+                auth_type: "session".to_string(),
+            };
+            state
+                .sessions
+                .lock()
+                .unwrap()
+                .insert(token.to_string(), principal.clone());
+            return Some(principal);
         }
     }
 
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({"error": "Unauthorized"})),
-    )
-        .into_response()
+    let valid = match &state.storage {
+        Some(storage) => storage
+            .list_api_tokens()
+            .await
+            .map(|tokens| {
+                token_is_valid(
+                    token,
+                    tokens
+                        .into_iter()
+                        .map(|token| (token.token, token.enabled, token.expires_at)),
+                )
+            })
+            .unwrap_or(false),
+        None => token_is_valid(
+            token,
+            load_tokens()
+                .into_iter()
+                .map(|token| (token.token, token.enabled, token.expires_at)),
+        ),
+    };
+    valid.then(|| AuthPrincipal {
+        username: "service-token".to_string(),
+        role: "admin".to_string(),
+        auth_type: "token".to_string(),
+    })
+}
+
+fn token_is_valid<I>(token: &str, tokens: I) -> bool
+where
+    I: IntoIterator<Item = (String, bool, Option<String>)>,
+{
+    let now = chrono::Utc::now();
+    tokens.into_iter().any(|(value, enabled, expires_at)| {
+        value == token
+            && enabled
+            && match expires_at {
+                None => true,
+                Some(exp) => chrono::DateTime::parse_from_rfc3339(&exp)
+                    .map(|dt| dt.with_timezone(&chrono::Utc) > now)
+                    .unwrap_or(false),
+            }
+    })
 }
 
 /* ─── Auth ─── */
@@ -98,10 +261,64 @@ struct LoginResponse {
 }
 
 async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) -> impl IntoResponse {
-    if body.username == state.config.username && body.password == state.config.password {
+    let (authenticated, role) = match &state.storage {
+        Some(storage) => {
+            let authenticated = storage
+                .verify_user(&body.username, &body.password)
+                .await
+                .unwrap_or(false);
+            let role = if authenticated {
+                storage
+                    .user_role(&body.username)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "owner".to_string())
+            } else {
+                "owner".to_string()
+            };
+            (authenticated, role)
+        }
+        None => (
+            body.username == state.config.username && body.password == state.config.password,
+            "owner".to_string(),
+        ),
+    };
+    if authenticated {
         let token = Uuid::new_v4().to_string();
-        state.sessions.lock().unwrap().push(token.clone());
-        (StatusCode::OK, Json(LoginResponse { token })).into_response()
+        let username = body.username.clone();
+        let expires_at = chrono::Utc::now().timestamp() + 86_400;
+        if let Some(storage) = &state.storage {
+            if let Err(error) = storage
+                .create_session(&token, &username, &role, expires_at)
+                .await
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "code": "auth.session_unavailable",
+                        "message": error.to_string()
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        state.sessions.lock().unwrap().insert(
+            token.clone(),
+            AuthPrincipal {
+                username,
+                role,
+                auth_type: "session".to_string(),
+            },
+        );
+        let cookie =
+            format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400");
+        (
+            StatusCode::OK,
+            [(header::SET_COOKIE, cookie)],
+            Json(LoginResponse { token }),
+        )
+            .into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,
@@ -111,7 +328,1493 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
     }
 }
 
+async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(token) = session_token(&headers) {
+        state.sessions.lock().unwrap().remove(&token);
+        if let Some(storage) = &state.storage {
+            let _ = storage.delete_session(&token).await;
+        }
+    }
+    (
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            "camrelay_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+        )],
+    )
+        .into_response()
+}
+
+async fn refresh_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(old_token) = session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(principal) = authenticate_token(&state, &old_token).await else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let token = Uuid::new_v4().to_string();
+    let expires_at = chrono::Utc::now().timestamp() + 86_400;
+    if let Some(storage) = &state.storage {
+        match storage
+            .rotate_session(
+                &old_token,
+                &token,
+                &principal.username,
+                &principal.role,
+                expires_at,
+            )
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "code": "auth.session_unavailable",
+                        "message": error.to_string()
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    state.sessions.lock().unwrap().remove(&old_token);
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .insert(token.clone(), principal);
+    let cookie = format!("camrelay_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400");
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(LoginResponse { token }),
+    )
+        .into_response()
+}
+
+async fn current_user(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let Some(token) = session_token(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    authenticate_token(&state, &token)
+        .await
+        .map(|principal| Json(principal).into_response())
+        .unwrap_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+}
+
+fn owner_required(principal: &AuthPrincipal) -> Option<Response> {
+    if principal.role == "owner" {
+        None
+    } else {
+        Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "code": "users.owner_required",
+                    "message": "Only the appliance owner can manage users."
+                })),
+            )
+                .into_response(),
+        )
+    }
+}
+
+async fn get_v1_users(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+) -> Response {
+    if let Some(response) = owner_required(&principal) {
+        return response;
+    }
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "users.sqlite_required",
+                "message": "User administration requires SQLite mode."
+            })),
+        )
+            .into_response();
+    };
+    match storage.list_users().await {
+        Ok(users) => Json(
+            users
+                .into_iter()
+                .map(|user| UserSummary {
+                    username: user.username,
+                    role: user.role,
+                    created_at: user.created_at,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "users.load_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_v1_audit(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Query(query): Query<RecordingsQuery>,
+) -> Response {
+    if !is_admin_role(&principal.role) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "audit.admin_required",
+                "message": "Only an owner or admin can view audit history."
+            })),
+        )
+            .into_response();
+    }
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "audit.sqlite_required",
+                "message": "Audit history requires SQLite mode."
+            })),
+        )
+            .into_response();
+    };
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    match storage.list_audit(limit).await {
+        Ok(events) => Json(
+            events
+                .into_iter()
+                .map(|event| AuditEventSummary {
+                    id: event.id,
+                    actor: event.actor,
+                    action: event.action,
+                    path: event.path,
+                    status: event.status,
+                    created_at: event.created_at,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "audit.load_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct UserPayload {
+    username: String,
+    password: String,
+    role: String,
+}
+
+fn user_role_is_valid(role: &str) -> bool {
+    matches!(role, "admin" | "operator" | "viewer")
+}
+
+async fn create_v1_user(
+    State(state): State<AppState>,
+    Extension(principal): Extension<AuthPrincipal>,
+    Json(body): Json<UserPayload>,
+) -> Response {
+    if let Some(response) = owner_required(&principal) {
+        return response;
+    }
+    let username = body.username.trim();
+    if username.is_empty()
+        || username.len() > 128
+        || body.password.len() < 8
+        || !user_role_is_valid(&body.role)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "users.invalid_input",
+                "message": "Username, a password of at least 8 characters, and a valid non-owner role are required."
+            })),
+        )
+            .into_response();
+    }
+    let Some(storage) = &state.storage else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "users.sqlite_required",
+                "message": "User administration requires SQLite mode."
+            })),
+        )
+            .into_response();
+    };
+    if let Err(error) = storage
+        .create_user(username, &body.password, &body.role)
+        .await
+    {
+        let status = if error.to_string().contains("UNIQUE") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return (
+            status,
+            Json(serde_json::json!({
+                "code": "users.create_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response();
+    }
+    match storage.list_users().await {
+        Ok(users) => users
+            .into_iter()
+            .find(|user| user.username == username)
+            .map(|user| {
+                (
+                    StatusCode::CREATED,
+                    Json(UserSummary {
+                        username: user.username,
+                        role: user.role,
+                        created_at: user.created_at,
+                    }),
+                )
+                    .into_response()
+            })
+            .unwrap_or_else(|| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "code": "users.load_failed",
+                "message": error.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    {
+        return Some(token.to_string());
+    }
+
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value.split(';').find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == "camrelay_session").then(|| value.to_string())
+            })
+        })
+}
+
+async fn find_camera_config(state: &AppState, id: &str) -> Result<Option<Camera>, String> {
+    match &state.storage {
+        Some(storage) => storage
+            .find_camera_config(id)
+            .await
+            .map(|camera| camera.map(camera_from_storage))
+            .map_err(|error| error.to_string()),
+        None => Ok(load_cameras().into_iter().find(|camera| camera.id == id)),
+    }
+}
+
+async fn v1_health(State(state): State<AppState>) -> impl IntoResponse {
+    let (storage, storage_ok, camera_count) = match &state.storage {
+        Some(storage) => match storage.health_check().await {
+            Ok(()) => (
+                "sqlite",
+                true,
+                storage.camera_count().await.unwrap_or_default(),
+            ),
+            Err(_) => ("sqlite", false, 0),
+        },
+        None => ("legacy_json", true, load_cameras().len() as i64),
+    };
+    let status = if storage_ok { "ok" } else { "degraded" };
+    Json(serde_json::json!({
+        "api_version": API_VERSION,
+        "status": status,
+        "storage": storage,
+        "camera_count": camera_count,
+    }))
+}
+
+async fn v1_readiness(State(state): State<AppState>) -> impl IntoResponse {
+    let checks = if let Some(storage) = &state.storage {
+        serde_json::json!({
+            "storage": storage.health_check().await.is_ok(),
+            "mode": "sqlite"
+        })
+    } else {
+        serde_json::json!({
+            "storage": true,
+            "mode": "legacy_json"
+        })
+    };
+    let ready = checks
+        .get("storage")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "api_version": API_VERSION,
+            "status": if ready { "ready" } else { "not_ready" },
+            "checks": checks
+        })),
+    )
+}
+
+async fn system_stream(
+    State(state): State<AppState>,
+) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
+    let stream = async_stream::stream! {
+        loop {
+            let (storage, storage_ok, camera_count) = match &state.storage {
+                Some(storage) => match storage.health_check().await {
+                    Ok(()) => ("sqlite", true, storage.camera_count().await.unwrap_or_default()),
+                    Err(_) => ("sqlite", false, 0),
+                },
+                None => ("legacy_json", true, load_cameras().len() as i64),
+            };
+            let camera_ids: Vec<String> = match &state.storage {
+                Some(storage) => storage
+                    .list_cameras()
+                    .await
+                    .map(|cameras| cameras.into_iter().map(|camera| camera.id).collect())
+                    .unwrap_or_default(),
+                None => load_cameras().into_iter().map(|camera| camera.id).collect(),
+            };
+            let tunnels = camera_ids
+                .into_iter()
+                .map(|camera_id| {
+                    let status = match state.tunnel_manager.status(&camera_id) {
+                        TunnelStatus::Running => "running",
+                        TunnelStatus::Starting => "starting",
+                        TunnelStatus::Error(_) => "error",
+                        TunnelStatus::Stopped => "stopped",
+                    };
+                    serde_json::json!({ "id": camera_id, "status": status })
+                })
+                .collect::<Vec<_>>();
+            let payload = serde_json::json!({
+                "api_version": API_VERSION,
+                "status": if storage_ok { "ok" } else { "degraded" },
+                "storage": storage,
+                "camera_count": camera_count,
+                "tunnels": tunnels,
+            });
+            yield Ok(Event::default().event("system").json_data(payload).unwrap_or_else(|_| Event::default()));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    };
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+async fn get_v1_cameras(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.list_cameras().await {
+            Ok(cameras) => Json(
+                cameras
+                    .into_iter()
+                    .map(|camera| CameraSummary {
+                        id: camera.id,
+                        name: camera.name,
+                        brand: camera.brand,
+                        serial: camera.serial,
+                        local_port: camera.local_port,
+                        auto_start: camera.auto_start,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(
+        load_cameras()
+            .into_iter()
+            .map(|camera| CameraSummary {
+                id: camera.id,
+                name: camera.name,
+                brand: camera.brand,
+                serial: camera.serial,
+                local_port: camera.local_port,
+                auto_start: camera.auto_start,
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+async fn get_v1_camera(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.find_camera_config(&id).await {
+            Ok(Some(camera)) => Json(CameraSummary {
+                id: camera.id,
+                name: camera.name,
+                brand: camera.brand,
+                serial: camera.serial,
+                local_port: camera.local_port,
+                auto_start: camera.auto_start,
+            })
+            .into_response(),
+            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(
+                    serde_json::json!({"code": "camera.load_failed", "message": error.to_string()}),
+                ),
+            )
+                .into_response(),
+        };
+    }
+
+    match load_cameras().into_iter().find(|camera| camera.id == id) {
+        Some(camera) => Json(CameraSummary {
+            id: camera.id,
+            name: camera.name,
+            brand: camera.brand,
+            serial: camera.serial,
+            local_port: camera.local_port,
+            auto_start: camera.auto_start,
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct CameraDiagnosticsResponse {
+    camera_id: String,
+    provider: String,
+    provider_configured: bool,
+    tunnel_status: String,
+    tunnel_error: Option<String>,
+    local_port: u16,
+    rtsp_path: &'static str,
+    next_action: String,
+}
+
+async fn get_v1_camera_diagnostics(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let camera = match &state.storage {
+        Some(storage) => match storage.list_cameras().await {
+            Ok(cameras) => cameras
+                .into_iter()
+                .find(|camera| camera.id == id)
+                .map(|camera| CameraSummary {
+                    id: camera.id,
+                    name: camera.name,
+                    brand: camera.brand,
+                    serial: camera.serial,
+                    local_port: camera.local_port,
+                    auto_start: camera.auto_start,
+                }),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "code": "camera.diagnostics_unavailable",
+                        "message": error.to_string()
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        None => load_cameras()
+            .into_iter()
+            .find(|camera| camera.id == id)
+            .map(|camera| CameraSummary {
+                id: camera.id,
+                name: camera.name,
+                brand: camera.brand,
+                serial: camera.serial,
+                local_port: camera.local_port,
+                auto_start: camera.auto_start,
+            }),
+    };
+    let Some(camera) = camera else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let provider_configured = match &state.storage {
+        Some(storage) => storage
+            .list_providers()
+            .await
+            .map(|providers| {
+                providers
+                    .iter()
+                    .any(|provider| provider.name == camera.brand)
+            })
+            .unwrap_or(false),
+        None => load_brands()
+            .iter()
+            .any(|provider| provider.name == camera.brand),
+    };
+    let (tunnel_status, tunnel_error) = match state.tunnel_manager.status(&id) {
+        TunnelStatus::Running => ("running".to_string(), None),
+        TunnelStatus::Starting => ("starting".to_string(), None),
+        TunnelStatus::Stopped => ("stopped".to_string(), None),
+        TunnelStatus::Error(error) => ("error".to_string(), Some(error)),
+    };
+    let next_action = if !provider_configured {
+        "Configure the provider profile before starting the relay.".to_string()
+    } else if tunnel_status == "running" {
+        "The local RTSP endpoint is ready for FFmpeg, Frigate, or a media gateway.".to_string()
+    } else {
+        "Start the relay, then verify the local RTSP endpoint with ffplay.".to_string()
+    };
+
+    Json(CameraDiagnosticsResponse {
+        camera_id: camera.id,
+        provider: camera.brand,
+        provider_configured,
+        tunnel_status,
+        tunnel_error,
+        local_port: camera.local_port,
+        rtsp_path: "/cam/realmonitor?channel=1&subtype=0",
+        next_action,
+    })
+    .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct CameraUpdatePayload {
+    name: Option<String>,
+    brand: Option<String>,
+    serial: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    port: Option<u16>,
+    local_port: Option<u16>,
+    auto_start: Option<bool>,
+}
+
+fn camera_is_valid(camera: &Camera) -> bool {
+    !camera.name.trim().is_empty()
+        && !camera.brand.trim().is_empty()
+        && !camera.serial.trim().is_empty()
+        && !camera.username.trim().is_empty()
+        && !camera.password.is_empty()
+        && camera.port > 0
+        && camera.local_port > 0
+}
+
+async fn update_v1_camera(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CameraUpdatePayload>,
+) -> impl IntoResponse {
+    let current = match &state.storage {
+        Some(storage) => match storage.find_camera_config(&id).await {
+            Ok(Some(camera)) => Some(camera_from_storage(camera)),
+            Ok(None) => None,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"code": "camera.load_failed", "message": error.to_string()})),
+                )
+                    .into_response();
+            }
+        },
+        None => load_cameras().into_iter().find(|camera| camera.id == id),
+    };
+    let Some(mut camera) = current else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    if let Some(value) = body.name {
+        camera.name = value;
+    }
+    if let Some(value) = body.brand {
+        camera.brand = value;
+    }
+    if let Some(value) = body.serial {
+        camera.serial = value;
+    }
+    if let Some(value) = body.username {
+        camera.username = value;
+    }
+    if let Some(value) = body.password {
+        camera.password = value;
+    }
+    if let Some(value) = body.port {
+        camera.port = value;
+    }
+    if let Some(value) = body.local_port {
+        camera.local_port = value;
+    }
+    if let Some(value) = body.auto_start {
+        camera.auto_start = value;
+    }
+    if !camera_is_valid(&camera) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "camera.invalid_input",
+                "message": "The resulting camera configuration is incomplete or invalid."
+            })),
+        )
+            .into_response();
+    }
+
+    let result = if let Some(storage) = &state.storage {
+        storage
+            .upsert_camera(&LegacyCamera {
+                id: camera.id.clone(),
+                name: camera.name.clone(),
+                brand: camera.brand.clone(),
+                serial: camera.serial.clone(),
+                username: camera.username.clone(),
+                password: camera.password.clone(),
+                port: camera.port,
+                local_port: camera.local_port,
+                auto_start: camera.auto_start,
+            })
+            .await
+            .map_err(|error| error.to_string())
+    } else {
+        let mut cameras = load_cameras();
+        if let Some(existing) = cameras.iter_mut().find(|existing| existing.id == id) {
+            *existing = camera.clone();
+            save_cameras(&cameras).map_err(|error| error.to_string())
+        } else {
+            Err("Camera not found".to_string())
+        }
+    };
+    if let Err(error) = result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "camera.save_failed", "message": error})),
+        )
+            .into_response();
+    }
+    Json(CameraSummary {
+        id: camera.id,
+        name: camera.name,
+        brand: camera.brand,
+        serial: camera.serial,
+        local_port: camera.local_port,
+        auto_start: camera.auto_start,
+    })
+    .into_response()
+}
+
+async fn delete_v1_camera(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    state.tunnel_manager.stop(&id);
+    state.live_manager.stop(&id);
+    let result = if let Some(storage) = &state.storage {
+        storage.delete_camera(&id).await
+    } else {
+        let mut cameras = load_cameras();
+        let before = cameras.len();
+        cameras.retain(|camera| camera.id != id);
+        if cameras.len() == before {
+            Ok(false)
+        } else {
+            save_cameras(&cameras)
+                .map(|_| true)
+                .map_err(camrelay_storage::StorageError::from)
+        }
+    };
+    match result {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "camera.delete_failed", "message": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_v1_camera(
+    State(state): State<AppState>,
+    Json(body): Json<CameraPayload>,
+) -> impl IntoResponse {
+    if body.name.trim().is_empty()
+        || body.brand.trim().is_empty()
+        || body.serial.trim().is_empty()
+        || body.username.trim().is_empty()
+        || body.password.is_empty()
+        || body.port == 0
+        || body.local_port == 0
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "camera.invalid_input",
+                "message": "Name, provider, serial, credentials, and valid ports are required."
+            })),
+        )
+            .into_response();
+    }
+
+    let camera = Camera {
+        id: Uuid::new_v4().to_string(),
+        name: body.name,
+        brand: body.brand,
+        serial: body.serial,
+        username: body.username,
+        password: body.password,
+        port: body.port,
+        local_port: body.local_port,
+        auto_start: body.auto_start,
+    };
+    if let Some(storage) = &state.storage {
+        let legacy = LegacyCamera {
+            id: camera.id.clone(),
+            name: camera.name.clone(),
+            brand: camera.brand.clone(),
+            serial: camera.serial.clone(),
+            username: camera.username.clone(),
+            password: camera.password.clone(),
+            port: camera.port,
+            local_port: camera.local_port,
+            auto_start: camera.auto_start,
+        };
+        if let Err(error) = storage.upsert_camera(&legacy).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "camera.save_failed",
+                    "message": error.to_string()
+                })),
+            )
+                .into_response();
+        }
+    } else {
+        let mut cameras = load_cameras();
+        cameras.push(camera.clone());
+        if save_cameras(&cameras).is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "camera.save_failed",
+                    "message": "Could not save camera configuration."
+                })),
+            )
+                .into_response();
+        }
+    }
+    (
+        StatusCode::CREATED,
+        Json(CameraSummary {
+            id: camera.id,
+            name: camera.name,
+            brand: camera.brand,
+            serial: camera.serial,
+            local_port: camera.local_port,
+            auto_start: camera.auto_start,
+        }),
+    )
+        .into_response()
+}
+
 /* ─── Brand handlers ─── */
+
+async fn get_v1_recordings(
+    State(state): State<AppState>,
+    Query(query): Query<RecordingsQuery>,
+) -> impl IntoResponse {
+    Json(
+        state
+            .recording_manager
+            .list_filtered(
+                query.camera_id.as_deref(),
+                query.status.as_deref(),
+                query.limit.unwrap_or(100),
+            )
+            .into_iter()
+            .map(|recording| {
+                let archive_available = recording.status == "archived";
+                RecordingSummary {
+                    id: recording.id,
+                    camera_id: recording.camera_id,
+                    camera_name: recording.camera_name,
+                    started_at: recording.started_at,
+                    ended_at: recording.ended_at,
+                    kind: recording.kind,
+                    bytes: recording.bytes,
+                    status: recording.status,
+                    archive_available,
+                    checksum_sha256: recording.checksum_sha256,
+                    archive_verified: recording.archive_verified,
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+async fn get_v1_events(
+    State(state): State<AppState>,
+    Query(query): Query<RecordingsQuery>,
+) -> impl IntoResponse {
+    // Until a durable event table exists, closed recording segments are the
+    // only event source with a stable persisted timestamp. The `source` field
+    // keeps this boundary honest for clients that will later consume motion
+    // and system events as well.
+    let events = state
+        .recording_manager
+        .list_filtered(
+            query.camera_id.as_deref(),
+            query.status.as_deref(),
+            query.limit.unwrap_or(100),
+        )
+        .into_iter()
+        .map(|recording| EventSummary {
+            id: format!("recording:{}", recording.id),
+            kind: "recording.segment".to_string(),
+            recording_id: Some(recording.id.clone()),
+            camera_id: recording.camera_id,
+            camera_name: recording.camera_name,
+            occurred_at: recording
+                .ended_at
+                .unwrap_or_else(|| recording.started_at.clone()),
+            severity: "info".to_string(),
+            message: format!(
+                "{} recording segment is {}",
+                recording.kind, recording.status
+            ),
+            source: "recording_index".to_string(),
+        })
+        .collect::<Vec<_>>();
+    Json(events).into_response()
+}
+
+fn recording_summary(recording: Recording) -> RecordingSummary {
+    let archive_available = recording.status == "archived";
+    RecordingSummary {
+        id: recording.id,
+        camera_id: recording.camera_id,
+        camera_name: recording.camera_name,
+        started_at: recording.started_at,
+        ended_at: recording.ended_at,
+        kind: recording.kind,
+        bytes: recording.bytes,
+        status: recording.status,
+        archive_available,
+        checksum_sha256: recording.checksum_sha256,
+        archive_verified: recording.archive_verified,
+    }
+}
+
+async fn get_v1_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.recording_manager.get(&id) {
+        Some(recording) => Json(recording_summary(recording)).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn archive_v1_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.recording_manager.archive(&id).await {
+        Ok(recording) => Json(recording_summary(recording)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"code": "recording.archive_failed", "message": error})),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_v1_tokens(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.list_api_tokens().await {
+            Ok(tokens) => Json(
+                tokens
+                    .into_iter()
+                    .map(|token| ApiTokenSummary {
+                        id: token.id,
+                        name: token.name,
+                        expires_at: token.expires_at,
+                        enabled: token.enabled,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(
+        load_tokens()
+            .into_iter()
+            .map(|token| ApiTokenSummary {
+                id: token.id,
+                name: token.name,
+                expires_at: token.expires_at,
+                enabled: token.enabled,
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+async fn create_v1_token(
+    State(state): State<AppState>,
+    Json(body): Json<TokenPayload>,
+) -> impl IntoResponse {
+    if body.name.trim().is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "token.invalid_input",
+                "message": "Token name is required."
+            })),
+        )
+            .into_response();
+    }
+    let token = ApiToken {
+        id: Uuid::new_v4().to_string(),
+        name: body.name,
+        token: format!("camrelay_{}", Uuid::new_v4().to_string().replace('-', "")),
+        expires_at: body.expires_at,
+        enabled: body.enabled,
+    };
+    let result = if let Some(storage) = &state.storage {
+        storage
+            .upsert_api_token(&camrelay_storage::LegacyToken {
+                id: token.id.clone(),
+                name: token.name.clone(),
+                token: token.token.clone(),
+                expires_at: token.expires_at.clone(),
+                enabled: token.enabled,
+            })
+            .await
+            .map_err(|error| error.to_string())
+    } else {
+        let mut tokens = load_tokens();
+        tokens.push(token.clone());
+        save_tokens(&tokens).map_err(|error| error.to_string())
+    };
+    if let Err(error) = result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "token.save_failed", "message": error})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": token.id,
+            "name": token.name,
+            "expires_at": token.expires_at,
+            "enabled": token.enabled,
+            "token": token.token
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct TokenPatchPayload {
+    name: Option<String>,
+    expires_at: Option<String>,
+    enabled: Option<bool>,
+}
+
+async fn update_v1_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<TokenPatchPayload>,
+) -> impl IntoResponse {
+    let current = match &state.storage {
+        Some(storage) => match storage.list_api_tokens().await {
+            Ok(tokens) => tokens
+                .into_iter()
+                .find(|token| token.id == id)
+                .map(|token| ApiToken {
+                    id: token.id,
+                    name: token.name,
+                    token: token.token,
+                    expires_at: token.expires_at,
+                    enabled: token.enabled,
+                }),
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"code": "token.load_failed", "message": error.to_string()})),
+                )
+                    .into_response();
+            }
+        },
+        None => load_tokens().into_iter().find(|token| token.id == id),
+    };
+    let Some(mut token) = current else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if let Some(name) = body.name {
+        token.name = name;
+    }
+    if let Some(expires_at) = body.expires_at {
+        token.expires_at = Some(expires_at);
+    }
+    if let Some(enabled) = body.enabled {
+        token.enabled = enabled;
+    }
+    if token.name.trim().is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"code": "token.invalid_input", "message": "Token name is required."})),
+        )
+            .into_response();
+    }
+    let result = if let Some(storage) = &state.storage {
+        storage
+            .upsert_api_token(&camrelay_storage::LegacyToken {
+                id: token.id.clone(),
+                name: token.name.clone(),
+                token: token.token.clone(),
+                expires_at: token.expires_at.clone(),
+                enabled: token.enabled,
+            })
+            .await
+            .map_err(|error| error.to_string())
+    } else {
+        let mut tokens = load_tokens();
+        if let Some(existing) = tokens.iter_mut().find(|existing| existing.id == id) {
+            *existing = token.clone();
+            save_tokens(&tokens).map_err(|error| error.to_string())
+        } else {
+            Err("Token not found".to_string())
+        }
+    };
+    if let Err(error) = result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "token.save_failed", "message": error})),
+        )
+            .into_response();
+    }
+    Json(ApiTokenSummary {
+        id: token.id,
+        name: token.name,
+        expires_at: token.expires_at,
+        enabled: token.enabled,
+    })
+    .into_response()
+}
+
+async fn delete_v1_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let result = if let Some(storage) = &state.storage {
+        storage.delete_api_token(&id).await
+    } else {
+        let mut tokens = load_tokens();
+        let before = tokens.len();
+        tokens.retain(|token| token.id != id);
+        if tokens.len() == before {
+            Ok(false)
+        } else {
+            save_tokens(&tokens)
+                .map(|_| true)
+                .map_err(camrelay_storage::StorageError::from)
+        }
+    };
+    match result {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "token.delete_failed", "message": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_v1_providers(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.list_providers().await {
+            Ok(providers) => Json(
+                providers
+                    .into_iter()
+                    .map(|provider| ProviderSummary {
+                        id: provider.id,
+                        name: provider.name,
+                        main_server: provider.main_server,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response(),
+        };
+    }
+
+    Json(
+        load_brands()
+            .into_iter()
+            .map(|brand| ProviderSummary {
+                id: brand.id,
+                name: brand.name,
+                main_server: brand.main_server,
+            })
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+async fn get_v1_provider(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(storage) = &state.storage {
+        return match storage.find_provider_config_by_id(&id).await {
+            Ok(Some(provider)) => Json(ProviderSummary {
+                id: provider.id,
+                name: provider.name,
+                main_server: provider.main_server,
+            })
+            .into_response(),
+            Ok(None) => StatusCode::NOT_FOUND.into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"code": "provider.load_failed", "message": error.to_string()})),
+            )
+                .into_response(),
+        };
+    }
+
+    match load_brands().into_iter().find(|provider| provider.id == id) {
+        Some(provider) => Json(ProviderSummary {
+            id: provider.id,
+            name: provider.name,
+            main_server: provider.main_server,
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct ProviderUpdatePayload {
+    name: Option<String>,
+    main_server: Option<String>,
+    app_username: Option<String>,
+    app_userkey: Option<String>,
+}
+
+async fn update_v1_provider(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ProviderUpdatePayload>,
+) -> impl IntoResponse {
+    let current = match &state.storage {
+        Some(storage) => match storage.find_provider_config_by_id(&id).await {
+            Ok(Some(provider)) => Some(Brand {
+                id: provider.id,
+                name: provider.name,
+                main_server: provider.main_server,
+                app_username: provider.app_username,
+                app_userkey: provider.app_userkey,
+            }),
+            Ok(None) => None,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"code": "provider.load_failed", "message": error.to_string()})),
+                )
+                    .into_response();
+            }
+        },
+        None => load_brands().into_iter().find(|provider| provider.id == id),
+    };
+    let Some(mut provider) = current else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if let Some(value) = body.name {
+        if value != provider.name {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "code": "provider.name_immutable",
+                    "message": "Provider names are identifiers for camera compatibility and cannot be changed."
+                })),
+            )
+                .into_response();
+        }
+    }
+    if let Some(value) = body.main_server {
+        provider.main_server = value;
+    }
+    if let Some(value) = body.app_username {
+        provider.app_username = value;
+    }
+    if let Some(value) = body.app_userkey {
+        provider.app_userkey = value;
+    }
+    if provider.main_server.trim().is_empty()
+        || provider.app_username.trim().is_empty()
+        || provider.app_userkey.trim().is_empty()
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "provider.invalid_input",
+                "message": "Signaling server, app username, and app userkey are required."
+            })),
+        )
+            .into_response();
+    }
+
+    let result = if let Some(storage) = &state.storage {
+        storage
+            .update_provider(&camrelay_storage::LegacyBrand {
+                id: provider.id.clone(),
+                name: provider.name.clone(),
+                main_server: provider.main_server.clone(),
+                app_username: provider.app_username.clone(),
+                app_userkey: provider.app_userkey.clone(),
+            })
+            .await
+            .map(|found| {
+                if found {
+                    Ok(())
+                } else {
+                    Err("Provider not found".to_string())
+                }
+            })
+            .unwrap_or_else(|error| Err(error.to_string()))
+    } else {
+        let mut providers = load_brands();
+        if let Some(existing) = providers.iter_mut().find(|existing| existing.id == id) {
+            *existing = provider.clone();
+            save_brands(&providers).map_err(|error| error.to_string())
+        } else {
+            Err("Provider not found".to_string())
+        }
+    };
+    if let Err(error) = result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"code": "provider.save_failed", "message": error})),
+        )
+            .into_response();
+    }
+    Json(ProviderSummary {
+        id: provider.id,
+        name: provider.name,
+        main_server: provider.main_server,
+    })
+    .into_response()
+}
+
+async fn delete_v1_provider(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let provider = match &state.storage {
+        Some(storage) => storage
+            .find_provider_config_by_id(&id)
+            .await
+            .ok()
+            .flatten()
+            .map(|provider| provider.name),
+        None => load_brands()
+            .into_iter()
+            .find(|provider| provider.id == id)
+            .map(|provider| provider.name),
+    };
+    let Some(provider_name) = provider else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let used = match &state.storage {
+        Some(storage) => storage
+            .list_cameras()
+            .await
+            .map(|cameras| {
+                cameras
+                    .into_iter()
+                    .any(|camera| camera.brand == provider_name)
+            })
+            .unwrap_or(false),
+        None => load_cameras()
+            .into_iter()
+            .any(|camera| camera.brand == provider_name),
+    };
+    if used {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "provider.in_use",
+                "message": "The provider is still assigned to one or more cameras."
+            })),
+        )
+            .into_response();
+    }
+    let result = if let Some(storage) = &state.storage {
+        storage.delete_provider(&id).await
+    } else {
+        let mut providers = load_brands();
+        let before = providers.len();
+        providers.retain(|provider| provider.id != id);
+        if providers.len() == before {
+            Ok(false)
+        } else {
+            save_brands(&providers)
+                .map(|_| true)
+                .map_err(camrelay_storage::StorageError::from)
+        }
+    };
+    match result {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(
+                serde_json::json!({"code": "provider.delete_failed", "message": error.to_string()}),
+            ),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_v1_provider(
+    State(state): State<AppState>,
+    Json(body): Json<BrandPayload>,
+) -> impl IntoResponse {
+    if body.name.trim().is_empty()
+        || body.main_server.trim().is_empty()
+        || body.app_username.trim().is_empty()
+        || body.app_userkey.trim().is_empty()
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "code": "provider.invalid_input",
+                "message": "Name, signaling server, app username, and app userkey are required."
+            })),
+        )
+            .into_response();
+    }
+
+    let provider = Brand {
+        id: Uuid::new_v4().to_string(),
+        name: body.name,
+        main_server: body.main_server,
+        app_username: body.app_username,
+        app_userkey: body.app_userkey,
+    };
+    if let Some(storage) = &state.storage {
+        let legacy = camrelay_storage::LegacyBrand {
+            id: provider.id.clone(),
+            name: provider.name.clone(),
+            main_server: provider.main_server.clone(),
+            app_username: provider.app_username.clone(),
+            app_userkey: provider.app_userkey.clone(),
+        };
+        if let Err(error) = storage.upsert_provider(&legacy).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "provider.save_failed",
+                    "message": error.to_string()
+                })),
+            )
+                .into_response();
+        }
+    } else {
+        let mut providers = load_brands();
+        providers.push(provider.clone());
+        if save_brands(&providers).is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "provider.save_failed",
+                    "message": "Could not save provider configuration."
+                })),
+            )
+                .into_response();
+        }
+    }
+    (
+        StatusCode::CREATED,
+        Json(ProviderSummary {
+            id: provider.id,
+            name: provider.name,
+            main_server: provider.main_server,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Serialize)]
+struct TunnelSummary {
+    id: String,
+    status: String,
+}
+
+async fn get_v1_tunnels(State(state): State<AppState>) -> impl IntoResponse {
+    let camera_ids: Vec<String> = match &state.storage {
+        Some(storage) => storage
+            .list_cameras()
+            .await
+            .map(|cameras| cameras.into_iter().map(|camera| camera.id).collect())
+            .unwrap_or_default(),
+        None => load_cameras().into_iter().map(|camera| camera.id).collect(),
+    };
+    Json(
+        camera_ids
+            .into_iter()
+            .map(|camera| TunnelSummary {
+                id: camera.clone(),
+                status: match state.tunnel_manager.status(&camera) {
+                    TunnelStatus::Running => "running".to_string(),
+                    TunnelStatus::Starting => "starting".to_string(),
+                    TunnelStatus::Error(error) => format!("error: {error}"),
+                    TunnelStatus::Stopped => "stopped".to_string(),
+                },
+            })
+            .collect::<Vec<_>>(),
+    )
+}
 
 async fn get_brands_handler() -> impl IntoResponse {
     Json(load_brands())
@@ -261,9 +1964,26 @@ async fn delete_camera(State(state): State<AppState>, Path(id): Path<String>) ->
 }
 
 async fn start_tunnel(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let cameras = load_cameras();
-    match cameras.into_iter().find(|c| c.id == id) {
-        Some(camera) => match state.tunnel_manager.start(camera) {
+    let camera_and_provider = match &state.storage {
+        Some(storage) => match storage.find_camera_config(&id).await {
+            Ok(Some(camera)) => {
+                let provider = storage
+                    .find_provider_config(&camera.brand)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(brand_from_storage);
+                Some((camera_from_storage(camera), provider))
+            }
+            _ => None,
+        },
+        None => load_cameras()
+            .into_iter()
+            .find(|camera| camera.id == id)
+            .map(|camera| (camera, None)),
+    };
+    match camera_and_provider {
+        Some((camera, provider)) => match state.tunnel_manager.start_with_brand(camera, provider) {
             Ok(_) => StatusCode::OK.into_response(),
             Err(e) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": e}))).into_response(),
         },
@@ -273,6 +1993,7 @@ async fn start_tunnel(State(state): State<AppState>, Path(id): Path<String>) -> 
 
 async fn stop_tunnel(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     state.tunnel_manager.stop(&id);
+    state.live_manager.stop(&id);
     StatusCode::OK
 }
 
@@ -292,8 +2013,8 @@ async fn get_tunnel_statuses(State(state): State<AppState>) -> impl IntoResponse
                 TunnelStatus::Running => (
                     "running".to_string(),
                     Some(format!(
-                        "rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-                        cam.username, cam.password, cam.local_port
+                        "rtsp://127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
+                        cam.local_port
                     )),
                 ),
                 TunnelStatus::Starting => ("starting".to_string(), None),
@@ -328,8 +2049,8 @@ async fn get_cameras_all(State(state): State<AppState>) -> impl IntoResponse {
         .map(|cam| {
             let rtsp = match state.tunnel_manager.status(&cam.id) {
                 TunnelStatus::Running => format!(
-                    "rtsp://{}:{}@127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
-                    cam.username, cam.password, cam.local_port
+                    "rtsp://127.0.0.1:{}/cam/realmonitor?channel=1&subtype=0",
+                    cam.local_port
                 ),
                 _ => String::new(),
             };
@@ -439,23 +2160,101 @@ async fn get_recording_handler(
 #[derive(Serialize)]
 struct RecordingConfigResponse {
     enabled: bool,
+    live_enabled: bool,
+    live_protocol: String,
+    live_protocol_available: bool,
     archive_enabled: bool,
+    archive_verify: bool,
     archive_configured: bool,
     segment_seconds: u32,
     local_retention_days: u32,
     ffmpeg_path: String,
+    checksum_algorithm: &'static str,
 }
 
-async fn get_recording_config(State(state): State<AppState>) -> impl IntoResponse {
+fn recording_config_response(state: &AppState) -> RecordingConfigResponse {
     let config = state.recording_manager.config();
-    Json(RecordingConfigResponse {
+    RecordingConfigResponse {
         enabled: config.recordings_enabled,
+        live_enabled: config.live_enabled,
+        live_protocol: state.live_manager.protocol(),
+        live_protocol_available: state.live_manager.protocol_available(),
         archive_enabled: config.archive_enabled,
+        archive_verify: config.archive_verify,
         archive_configured: !config.archive_remote.trim().is_empty(),
         segment_seconds: config.segment_seconds,
         local_retention_days: config.local_retention_days,
         ffmpeg_path: config.ffmpeg_path.clone(),
-    })
+        checksum_algorithm: "sha256",
+    }
+}
+
+async fn get_recording_config(State(state): State<AppState>) -> impl IntoResponse {
+    Json(recording_config_response(&state))
+}
+
+async fn get_v1_recording_config(State(state): State<AppState>) -> impl IntoResponse {
+    Json(recording_config_response(&state))
+}
+
+async fn get_v1_retention_preview(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.recording_manager.retention_preview())
+}
+
+#[derive(Deserialize)]
+struct RetentionCleanupRequest {
+    confirm: bool,
+    recording_ids: Vec<String>,
+}
+
+async fn post_v1_retention_cleanup(
+    State(state): State<AppState>,
+    principal: Option<Extension<AuthPrincipal>>,
+    Json(body): Json<RetentionCleanupRequest>,
+) -> impl IntoResponse {
+    if !principal
+        .as_ref()
+        .is_some_and(|principal| is_admin_role(&principal.role))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "code": "retention.admin_required",
+                "message": "Only an owner or admin can remove retained local recordings."
+            })),
+        )
+            .into_response();
+    }
+    if !body.confirm {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "code": "retention.confirmation_required",
+                "message": "Explicit confirmation is required before local files are removed."
+            })),
+        )
+            .into_response();
+    }
+    if body.recording_ids.is_empty() || body.recording_ids.len() > 500 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "code": "retention.invalid_selection",
+                "message": "Select between 1 and 500 retention candidates."
+            })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(
+            state
+                .recording_manager
+                .cleanup_retention(&body.recording_ids)
+                .await,
+        ),
+    )
+        .into_response()
 }
 
 async fn archive_recording_handler(
@@ -505,6 +2304,425 @@ async fn issue_playback_ticket(
         }),
     )
         .into_response()
+}
+
+#[derive(Serialize)]
+struct ThumbnailTicketResponse {
+    url: String,
+    expires_in_seconds: u64,
+}
+
+async fn issue_thumbnail_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let Some(recording) = state.recording_manager.get(&id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !FsPath::new(&recording.local_path).is_file() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "recording.thumbnail_unavailable",
+                "message": "A local recording file is required to generate a thumbnail."
+            })),
+        )
+            .into_response();
+    }
+    let ticket = Uuid::new_v4().to_string();
+    let expires_in_seconds = 600;
+    state.playback_tickets.lock().unwrap().insert(
+        ticket.clone(),
+        PlaybackGrant {
+            recording_id: id.clone(),
+            expires_at: Instant::now() + Duration::from_secs(expires_in_seconds),
+        },
+    );
+    (
+        StatusCode::OK,
+        Json(ThumbnailTicketResponse {
+            url: format!("/api/v1/thumbnails/{id}?ticket={ticket}"),
+            expires_in_seconds,
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Serialize)]
+struct LiveTicketResponse {
+    protocol: String,
+    url: String,
+    expires_in_seconds: u64,
+}
+
+async fn issue_live_ticket(
+    State(state): State<AppState>,
+    principal: Option<Extension<AuthPrincipal>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if principal.is_none() {
+        return unauthorized_response();
+    }
+    if !state.live_manager.config().live_enabled {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "live.disabled",
+                "message": "Live media is disabled in config.json."
+            })),
+        )
+            .into_response();
+    }
+    if !state.live_manager.protocol_available() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "live.protocol_unavailable",
+                "message": "The configured live protocol is not available in this deployment."
+            })),
+        )
+            .into_response();
+    }
+    let camera = match find_camera_config(&state, &id).await {
+        Ok(Some(camera)) => camera,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "code": "live.camera_load_failed",
+                    "message": error
+                })),
+            )
+                .into_response()
+        }
+    };
+    if !matches!(
+        state.tunnel_manager.status(&camera.id),
+        TunnelStatus::Running
+    ) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": "live.tunnel_required",
+                "message": "Start the camera relay before requesting live playback."
+            })),
+        )
+            .into_response();
+    }
+    if let Err(error) = state.live_manager.start(camera).await {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "code": "live.gateway_start_failed",
+                "message": error
+            })),
+        )
+            .into_response();
+    }
+
+    let ticket = Uuid::new_v4().to_string();
+    let expires_in_seconds = 900;
+    let mut tickets = state.live_tickets.lock().unwrap();
+    let now = Instant::now();
+    tickets.retain(|_, grant| grant.expires_at > now);
+    tickets.insert(
+        ticket.clone(),
+        LiveGrant {
+            camera_id: id,
+            expires_at: now + Duration::from_secs(expires_in_seconds),
+        },
+    );
+    let protocol = state.live_manager.protocol();
+    let url = if protocol == crate::live::WEBRTC_PROTOCOL {
+        format!("/api/v1/live/{ticket}/webrtc")
+    } else {
+        format!("/api/v1/live/{ticket}/index.m3u8")
+    };
+    (
+        StatusCode::OK,
+        Json(LiveTicketResponse {
+            protocol,
+            url,
+            expires_in_seconds,
+        }),
+    )
+        .into_response()
+}
+
+fn live_grant(state: &AppState, ticket: &str) -> Option<LiveGrant> {
+    let now = Instant::now();
+    let grant = {
+        let mut tickets = state.live_tickets.lock().unwrap();
+        tickets.retain(|_, grant| grant.expires_at > now);
+        tickets.get(ticket).cloned()
+    }?;
+    (grant.expires_at > now).then_some(grant)
+}
+
+fn normalize_whep_location(location: &str) -> Option<String> {
+    let url = if location.starts_with('/') {
+        Url::parse(&format!("{MEDIAMTX_WHEP_BASE_URL}{location}"))
+    } else {
+        Url::parse(location)
+    }
+    .ok()?;
+
+    if url.scheme() != "http"
+        || url.host_str() != Some("mediamtx")
+        || url.port().is_some_and(|port| port != 8889)
+        || !url.path().starts_with("/camrelay/")
+        || url.path().contains("..")
+        || url.path().contains('\\')
+    {
+        return None;
+    }
+
+    let mut path = url.path().to_string();
+    if let Some(query) = url.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    Some(path)
+}
+
+fn whep_ticket_error() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "code": "live.ticket_invalid",
+            "message": "Live ticket expired or invalid."
+        })),
+    )
+        .into_response()
+}
+
+fn whep_gateway_error() -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({
+            "code": "live.webrtc_gateway_unavailable",
+            "message": "The WebRTC gateway is unavailable."
+        })),
+    )
+        .into_response()
+}
+
+async fn whep_response(response: reqwest::Response, location: Option<String>) -> Response {
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let headers = response.headers().clone();
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(_) => return whep_gateway_error(),
+    };
+    let mut builder = Response::builder().status(status);
+    for name in [
+        "content-type",
+        "etag",
+        "accept-patch",
+        "link",
+        "cache-control",
+    ] {
+        if let Some(value) = headers.get(name) {
+            builder = builder.header(name, value);
+        }
+    }
+    if let Some(location) = location {
+        builder = builder.header(header::LOCATION, location);
+    } else if let Some(value) = headers.get(header::LOCATION) {
+        builder = builder.header(header::LOCATION, value);
+    }
+    builder
+        .body(Body::from(body))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+async fn whep_post_handler(
+    State(state): State<AppState>,
+    Path(ticket): Path<String>,
+    body: Body,
+) -> Response {
+    let Some(grant) = live_grant(&state, &ticket) else {
+        return whep_ticket_error();
+    };
+    if state.live_manager.protocol() != crate::live::WEBRTC_PROTOCOL
+        || !safe_live_component(&grant.camera_id)
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
+    let body = match axum::body::to_bytes(body, MAX_WHEP_SDP_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let target = format!("{MEDIAMTX_WHEP_BASE_URL}/camrelay/{}/whep", grant.camera_id);
+    let response = match state
+        .webrtc_client
+        .post(target)
+        .header(header::CONTENT_TYPE, "application/sdp")
+        .header(header::ACCEPT, "application/sdp")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return whep_gateway_error(),
+    };
+    if !response.status().is_success() {
+        return whep_response(response, None).await;
+    }
+    let Some(location) = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(normalize_whep_location)
+    else {
+        return whep_gateway_error();
+    };
+    let session = Uuid::new_v4().to_string();
+    let local_location = format!("/api/v1/live/{ticket}/webrtc/{session}");
+    let expires_at = grant.expires_at;
+    {
+        let mut sessions = state.webrtc_sessions.lock().unwrap();
+        sessions.retain(|_, session| session.expires_at > Instant::now());
+        sessions.insert(
+            session,
+            WebRtcSession {
+                ticket,
+                remote_path: location,
+                expires_at,
+            },
+        );
+    }
+    whep_response(response, Some(local_location)).await
+}
+
+async fn whep_patch_handler(
+    State(state): State<AppState>,
+    Path((ticket, session)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(grant) = live_grant(&state, &ticket) else {
+        return whep_ticket_error();
+    };
+    let remote_path = {
+        let sessions = state.webrtc_sessions.lock().unwrap();
+        sessions
+            .get(&session)
+            .filter(|value| value.ticket == ticket && value.expires_at > Instant::now())
+            .map(|value| value.remote_path.clone())
+    };
+    if remote_path.is_none() || grant.expires_at <= Instant::now() {
+        return whep_ticket_error();
+    }
+    let body = match axum::body::to_bytes(body, MAX_WHEP_SDP_BYTES).await {
+        Ok(body) => body,
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+    };
+    let mut request = state
+        .webrtc_client
+        .patch(format!("{MEDIAMTX_WHEP_BASE_URL}{}", remote_path.unwrap()))
+        .header(header::CONTENT_TYPE, "application/sdp")
+        .header(header::ACCEPT, "application/sdp");
+    if let Some(if_match) = headers.get(header::IF_MATCH) {
+        request = request.header(header::IF_MATCH, if_match);
+    }
+    let response = match request.body(body).send().await {
+        Ok(response) => response,
+        Err(_) => return whep_gateway_error(),
+    };
+    whep_response(response, None).await
+}
+
+async fn whep_delete_handler(
+    State(state): State<AppState>,
+    Path((ticket, session)): Path<(String, String)>,
+) -> Response {
+    let Some(grant) = live_grant(&state, &ticket) else {
+        return whep_ticket_error();
+    };
+    let remote_path = {
+        let mut sessions = state.webrtc_sessions.lock().unwrap();
+        let valid = sessions
+            .get(&session)
+            .filter(|value| value.ticket == ticket && value.expires_at > Instant::now())
+            .is_some();
+        if valid {
+            sessions.remove(&session).map(|value| value.remote_path)
+        } else {
+            None
+        }
+    };
+    if remote_path.is_none() || grant.expires_at <= Instant::now() {
+        return whep_ticket_error();
+    }
+    let response = match state
+        .webrtc_client
+        .delete(format!("{MEDIAMTX_WHEP_BASE_URL}{}", remote_path.unwrap()))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return whep_gateway_error(),
+    };
+    whep_response(response, None).await
+}
+
+async fn stream_live_handler(
+    State(state): State<AppState>,
+    Path((ticket, file)): Path<(String, String)>,
+) -> Response {
+    let grant = {
+        let tickets = state.live_tickets.lock().unwrap();
+        tickets
+            .get(&ticket)
+            .filter(|grant| grant.expires_at > Instant::now())
+            .cloned()
+    };
+    let Some(grant) = grant else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "code": "live.ticket_invalid",
+                "message": "Live ticket expired or invalid."
+            })),
+        )
+            .into_response();
+    };
+    if !safe_live_component(&grant.camera_id) || !safe_live_file(&file) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let path = FsPath::new(&state.live_manager.config().live_dir)
+        .join(grant.camera_id)
+        .join(&file);
+    let content = match tokio::fs::read(path).await {
+        Ok(content) => content,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let content_type = if file.ends_with(".m3u8") {
+        "application/vnd.apple.mpegurl"
+    } else {
+        "video/mp2t"
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(content))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn safe_live_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains('/')
+        && !value.contains('\\')
+        && value != "."
+        && value != ".."
+}
+
+fn safe_live_file(value: &str) -> bool {
+    safe_live_component(value) && (value.ends_with(".m3u8") || value.ends_with(".ts"))
 }
 
 async fn playback_auth_middleware(
@@ -646,7 +2864,65 @@ async fn stream_recording_handler(
     response
 }
 
+async fn stream_thumbnail_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let thumbnail = match state.recording_manager.ensure_thumbnail(&id).await {
+        Ok(path) => path,
+        Err(error) if error == "Recording not found" => {
+            return StatusCode::NOT_FOUND.into_response()
+        }
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "code": "recording.thumbnail_failed",
+                    "message": error
+                })),
+            )
+                .into_response()
+        }
+    };
+    let content = match tokio::fs::read(thumbnail).await {
+        Ok(content) => content,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .body(Body::from(content))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn camera_from_storage(camera: StoredCameraConfig) -> Camera {
+    Camera {
+        id: camera.id,
+        name: camera.name,
+        brand: camera.brand,
+        serial: camera.serial,
+        username: camera.username,
+        password: camera.password,
+        port: camera.port,
+        local_port: camera.local_port,
+        auto_start: camera.auto_start,
+    }
+}
+
+fn brand_from_storage(provider: StoredProviderConfig) -> Brand {
+    Brand {
+        id: provider.id,
+        name: provider.name,
+        main_server: provider.main_server,
+        app_username: provider.app_username,
+        app_userkey: provider.app_userkey,
+    }
+}
+
 pub fn create_router(state: AppState) -> Router {
+    let web_root = state.config.web_root.clone();
+    let web_index = format!("{web_root}/index.html");
     let protected = Router::new()
         .route(
             "/brands",
@@ -679,25 +2955,139 @@ pub fn create_router(state: AppState) -> Router {
             "/recordings/:id/playback-ticket",
             post(issue_playback_ticket),
         )
+        .route(
+            "/recordings/:id/thumbnail-ticket",
+            post(issue_thumbnail_ticket),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ));
 
-    let login_router = Router::new().route("/login", post(login));
+    let login_router = Router::new()
+        .route("/login", post(login))
+        .route("/logout", post(logout));
     let playback_router = Router::new()
         .route("/playback/:id", get(stream_recording_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             playback_auth_middleware,
         ));
+    let v1_thumbnail_router = Router::new()
+        .route("/thumbnails/:id", get(stream_thumbnail_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            playback_auth_middleware,
+        ));
+    let v1_public = Router::new()
+        .route("/health", get(v1_health))
+        .route("/system/health", get(v1_health))
+        .route("/system/readiness", get(v1_readiness))
+        .route("/live/:ticket/webrtc", post(whep_post_handler))
+        .route(
+            "/live/:ticket/webrtc/:session",
+            patch(whep_patch_handler).delete(whep_delete_handler),
+        )
+        .route("/live/:ticket/*file", get(stream_live_handler));
+    let v1_auth = Router::new()
+        .route("/auth/login", post(login))
+        .route("/auth/refresh", post(refresh_session))
+        .route("/auth/logout", post(logout))
+        .route("/me", get(current_user));
+    let v1_protected = Router::new()
+        .route("/users", get(get_v1_users).post(create_v1_user))
+        .route("/audit", get(get_v1_audit))
+        .route("/system/stream", get(system_stream))
+        .route("/cameras", get(get_v1_cameras).post(create_v1_camera))
+        .route(
+            "/cameras/:id",
+            get(get_v1_camera)
+                .patch(update_v1_camera)
+                .delete(delete_v1_camera),
+        )
+        .route("/cameras/:id/diagnostics", get(get_v1_camera_diagnostics))
+        .route("/cameras/:id/live-ticket", post(issue_live_ticket))
+        .route("/providers", get(get_v1_providers).post(create_v1_provider))
+        .route(
+            "/providers/:id",
+            get(get_v1_provider)
+                .patch(update_v1_provider)
+                .delete(delete_v1_provider),
+        )
+        .route("/recordings", get(get_v1_recordings))
+        .route("/recordings/config", get(get_v1_recording_config))
+        .route(
+            "/recordings/retention-preview",
+            get(get_v1_retention_preview),
+        )
+        .route(
+            "/recordings/retention-cleanup",
+            post(post_v1_retention_cleanup),
+        )
+        .route("/events", get(get_v1_events))
+        .route("/recordings/:id", get(get_v1_recording))
+        .route(
+            "/recordings/:id/playback-ticket",
+            post(issue_playback_ticket),
+        )
+        .route(
+            "/recordings/:id/thumbnail-ticket",
+            post(issue_thumbnail_ticket),
+        )
+        .route("/recordings/:id/archive", post(archive_v1_recording))
+        .route("/tokens", get(get_v1_tokens).post(create_v1_token))
+        .route(
+            "/tokens/:id",
+            patch(update_v1_token).delete(delete_v1_token),
+        )
+        .route("/tunnels", get(get_v1_tunnels))
+        .route("/cameras/:id/start", post(start_tunnel))
+        .route("/cameras/:id/stop", post(stop_tunnel))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
 
     Router::new()
         .nest("/api", protected)
         .nest("/api", login_router)
         .nest("/api", playback_router)
-        .fallback_service(
-            ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")),
-        )
+        .nest("/api/v1", v1_public)
+        .nest("/api/v1", v1_auth)
+        .nest("/api/v1", v1_thumbnail_router)
+        .nest("/api/v1", v1_protected)
+        // `fallback` preserves the index file's 200 status for SPA deep links;
+        // `not_found_service` would return the right body with a misleading 404.
+        .fallback_service(ServeDir::new(web_root).fallback(ServeFile::new(web_index)))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{legacy_secret_read_path, normalize_whep_location};
+
+    #[test]
+    fn legacy_secret_routes_are_explicitly_scoped() {
+        assert!(legacy_secret_read_path("/api/brands"));
+        assert!(legacy_secret_read_path("/api/cameras"));
+        assert!(legacy_secret_read_path("/api/cameras/all"));
+        assert!(legacy_secret_read_path("/api/tokens"));
+        assert!(legacy_secret_read_path("/cameras"));
+        assert!(!legacy_secret_read_path("/api/v1/providers"));
+        assert!(!legacy_secret_read_path("/api/recordings"));
+    }
+
+    #[test]
+    fn whep_location_is_restricted_to_private_mediamtx_path() {
+        assert_eq!(
+            normalize_whep_location("http://mediamtx:8889/camrelay/cam-1/whep/abc"),
+            Some("/camrelay/cam-1/whep/abc".to_string())
+        );
+        assert_eq!(
+            normalize_whep_location("/camrelay/cam-1/whep/abc?x=1"),
+            Some("/camrelay/cam-1/whep/abc?x=1".to_string())
+        );
+        assert!(normalize_whep_location("https://example.com/camrelay/cam-1/whep/abc").is_none());
+        assert!(normalize_whep_location("http://mediamtx:8889/admin").is_none());
+    }
 }

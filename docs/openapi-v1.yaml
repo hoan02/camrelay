@@ -1,0 +1,782 @@
+openapi: 3.1.0
+info:
+  title: Camrelay API
+  version: 1.0.0
+  description: Versioned control-plane contract for the self-hosted camera relay.
+servers:
+  - url: http://localhost:8080
+security:
+  - sessionCookie: []
+  - bearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      security: []
+      summary: Liveness and storage health
+      responses:
+        '200':
+          description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/v1/system/readiness:
+    get:
+      security: []
+      summary: Deployment readiness
+      responses:
+        '200':
+          description: Ready
+        '503':
+          description: Not ready
+  /api/v1/system/stream:
+    get:
+      summary: Stream authenticated system telemetry
+      description: Server-Sent Events with storage, camera count, and tunnel status snapshots.
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/login:
+    post:
+      security: []
+      summary: Create a browser session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session created; an HttpOnly cookie is also set
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/refresh:
+    post:
+      summary: Rotate the current browser session
+      responses:
+        '200':
+          description: Rotated session
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the current browser session
+      responses:
+        '204':
+          description: Session revoked
+  /api/v1/me:
+    get:
+      summary: Current authenticated principal
+      responses:
+        '200':
+          description: Principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Principal'
+  /api/v1/users:
+    get:
+      summary: List appliance users
+      description: Owner-only secret-free user summaries.
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserSummary'
+        '403':
+          description: Owner role required
+    post:
+      summary: Create an appliance user
+      description: Owner-only; new users may be admin, operator, or viewer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserInput'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '409':
+          description: User already exists or SQLite is required
+  /api/v1/cameras:
+    get:
+      summary: List secret-free cameras
+      responses:
+        '200':
+          description: Camera summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CameraSummary'
+    post:
+      summary: Add a camera
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraInput'
+      responses:
+        '201':
+          description: Camera created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraSummary'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/v1/cameras/{camera_id}:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      summary: Get a secret-free camera
+      responses:
+        '200':
+          description: Camera
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraSummary'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: Update a camera; omitted secrets are retained
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraPatch'
+      responses:
+        '200':
+          description: Updated camera
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraSummary'
+    delete:
+      summary: Stop and delete a camera
+      responses:
+        '204':
+          description: Camera deleted
+  /api/v1/cameras/{camera_id}/diagnostics:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      summary: Get secret-free relay diagnostics
+      responses:
+        '200':
+          description: Camera and tunnel diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraDiagnostics'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/cameras/{camera_id}/live-ticket:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    post:
+      summary: Issue a scoped live media ticket
+      description: Starts the configured live gateway when enabled and returns a camera-scoped ticket. HLS is the verified protocol; WebRTC is available only with the explicit private gateway profile and remains experimental.
+      responses:
+        '200':
+          description: Live ticket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveTicket'
+        '409':
+          description: Live is disabled or the camera relay is not running
+  /api/v1/live/{ticket}/{file}:
+    parameters:
+      - name: ticket
+        in: path
+        required: true
+        schema: { type: string }
+      - name: file
+        in: path
+        required: true
+        schema: { type: string, pattern: '^(index\.m3u8|segment-[0-9]+\.ts)$' }
+    get:
+      security: []
+      summary: Read a scoped HLS playlist or segment
+      responses:
+        '200':
+          description: HLS media file
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/live/{ticket}/webrtc:
+    parameters:
+      - name: ticket
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      security: []
+      summary: Negotiate an experimental ticketed WHEP session
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: { type: string }
+      responses:
+        '201':
+          description: SDP answer and opaque Camrelay session location
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/sdp:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502': { description: Media gateway unavailable }
+  /api/v1/live/{ticket}/webrtc/{session}:
+    parameters:
+      - name: ticket
+        in: path
+        required: true
+        schema: { type: string }
+      - name: session
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      security: []
+      summary: Send a ticketed WHEP SDP/ICE update
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: { type: string }
+      responses:
+        '204': { description: Update accepted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      security: []
+      summary: Close a ticketed WHEP session
+      responses:
+        '200': { description: Gateway response }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/v1/cameras/{camera_id}/start:
+    post:
+      summary: Start a camera relay
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Start requested
+  /api/v1/cameras/{camera_id}/stop:
+    post:
+      summary: Stop a camera relay
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Stopped
+  /api/v1/providers:
+    get:
+      summary: List secret-free provider profiles
+      responses:
+        '200':
+          description: Provider summaries
+    post:
+      summary: Add a provider profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderInput'
+      responses:
+        '201':
+          description: Provider created
+  /api/v1/providers/{provider_id}:
+    parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get a secret-free provider profile
+      responses:
+        '200':
+          description: Provider summary
+    patch:
+      summary: Update provider credentials or signaling endpoint
+      description: Provider names are immutable because cameras reference them by name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderPatch'
+      responses:
+        '200':
+          description: Updated provider
+    delete:
+      summary: Delete an unused provider profile
+      responses:
+        '204':
+          description: Provider deleted
+        '409':
+          description: Provider is still in use
+  /api/v1/recordings:
+    get:
+      summary: List recording summaries
+      parameters:
+        - name: camera_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Recording summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RecordingSummary'
+  /api/v1/recordings/config:
+    get:
+      summary: Read recording and archive capabilities
+      responses:
+        '200':
+          description: Current media configuration without archive credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingConfig'
+  /api/v1/recordings/retention-preview:
+    get:
+      summary: Preview local retention candidates
+      description: Returns a read-only retention calculation. It never deletes files; segments that are not archived are reported as blocked when archive is enabled.
+      responses:
+        '200':
+          description: Retention preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionPreview'
+  /api/v1/recordings/retention-cleanup:
+    post:
+      summary: Remove explicitly confirmed local retention candidates
+      description: Owner/admin operation. The server rechecks eligibility, deletes only local files under the configured recordings directory, never deletes cloud objects, and retains index tombstones.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionCleanupRequest'
+      responses:
+        '200':
+          description: Cleanup result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionCleanupResult'
+        '400':
+          description: Confirmation or selection is invalid
+        '403':
+          description: Owner/admin role required
+  /api/v1/recordings/{recording_id}:
+    parameters:
+      - name: recording_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get a secret-free recording detail
+      responses:
+        '200':
+          description: Recording detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingSummary'
+  /api/v1/recordings/{recording_id}/playback-ticket:
+    post:
+      summary: Issue a short-lived playback ticket
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Playback URL and expiry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackTicket'
+  /api/v1/recordings/{recording_id}/thumbnail-ticket:
+    post:
+      summary: Issue a short-lived local thumbnail ticket
+      description: Returns a scoped URL for an on-demand JPEG thumbnail generated from a local MP4. Archived-only recordings do not produce thumbnails.
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Thumbnail URL and expiry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThumbnailTicket'
+  /api/v1/thumbnails/{recording_id}:
+    get:
+      security: []
+      summary: Read a scoped local JPEG thumbnail
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: ticket
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: JPEG thumbnail
+          content:
+            image/jpeg: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/recordings/{recording_id}/archive:
+    post:
+      summary: Queue or perform archive upload
+      parameters:
+        - name: recording_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated recording status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingSummary'
+  /api/v1/events:
+    get:
+      summary: List normalized activity events
+      description: The current implementation projects persisted recording segments as events.
+      responses:
+        '200':
+          description: Activity events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EventSummary'
+  /api/v1/audit:
+    get:
+      summary: List privacy-safe mutation audit events
+      description: Owner/admin only. Request bodies, query strings, and secret values are never persisted.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEvent'
+        '403':
+          description: Owner or admin role required
+  /api/v1/system/health:
+    get:
+      security: []
+      summary: Detailed service health alias
+      responses:
+        '200':
+          description: Service health
+  /api/v1/tunnels:
+    get:
+      summary: List secret-free tunnel lifecycle status
+      responses:
+        '200':
+          description: Tunnel status
+  /api/v1/tokens:
+    get:
+      summary: List secret-free API token summaries
+      responses:
+        '200':
+          description: Token summaries
+    post:
+      summary: Create an API token
+      description: The raw token is returned only in this response and must be stored by the caller.
+      responses:
+        '201':
+          description: Token created
+  /api/v1/tokens/{token_id}:
+    parameters:
+      - name: token_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      summary: Update token metadata or enabled state
+      responses:
+        '200':
+          description: Updated token summary
+    delete:
+      summary: Revoke an API token
+      responses:
+        '204':
+          description: Token revoked
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: camrelay_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    CameraId:
+      name: camera_id
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Authentication required
+    NotFound:
+      description: Resource not found
+    ValidationError:
+      description: Invalid input
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    Principal:
+      type: object
+      required: [username, role, auth_type]
+      properties:
+        username: { type: string }
+        role: { type: string, enum: [owner, admin, operator, viewer] }
+        auth_type: { type: string, enum: [session, token] }
+    UserSummary:
+      type: object
+      required: [username, role, created_at]
+      properties:
+        username: { type: string }
+        role: { type: string, enum: [owner, admin, operator, viewer] }
+        created_at: { type: string }
+    AuditEvent:
+      type: object
+      required: [id, actor, action, path, status, created_at]
+      properties:
+        id: { type: string }
+        actor: { type: string }
+        action: { type: string, enum: [POST, PUT, PATCH, DELETE] }
+        path: { type: string }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        created_at: { type: string }
+    UserInput:
+      type: object
+      required: [username, password, role]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 128 }
+        password: { type: string, format: password, minLength: 8 }
+        role: { type: string, enum: [admin, operator, viewer] }
+    Health:
+      type: object
+      required: [api_version, status, storage, camera_count]
+      properties:
+        api_version: { type: string }
+        status: { type: string, enum: [ok, degraded] }
+        storage: { type: string, enum: [sqlite, legacy_json] }
+        camera_count: { type: integer }
+    CameraSummary:
+      type: object
+      required: [id, name, brand, serial, local_port, auto_start]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        brand: { type: string }
+        serial: { type: string }
+        local_port: { type: integer, minimum: 1, maximum: 65535 }
+        auto_start: { type: boolean }
+    CameraInput:
+      allOf:
+        - $ref: '#/components/schemas/CameraPatch'
+        - type: object
+          required: [name, brand, serial, username, password, port, local_port]
+    CameraPatch:
+      type: object
+      properties:
+        name: { type: string }
+        brand: { type: string }
+        serial: { type: string }
+        username: { type: string }
+        password: { type: string, format: password }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        local_port: { type: integer, minimum: 1, maximum: 65535 }
+        auto_start: { type: boolean }
+    CameraDiagnostics:
+      type: object
+      required: [camera_id, provider, provider_configured, tunnel_status, local_port, rtsp_path, next_action]
+      properties:
+        camera_id: { type: string }
+        provider: { type: string }
+        provider_configured: { type: boolean }
+        tunnel_status: { type: string, enum: [stopped, starting, running, error] }
+        tunnel_error: { type: string, nullable: true }
+        local_port: { type: integer, minimum: 1, maximum: 65535 }
+        rtsp_path: { type: string }
+        next_action: { type: string }
+    LiveTicket:
+      type: object
+      required: [protocol, url, expires_in_seconds]
+      properties:
+        protocol:
+          type: string
+          enum: [hls, webrtc]
+          description: Live gateway protocol. WebRTC requires the explicit private gateway profile and remains experimental.
+        url: { type: string }
+        expires_in_seconds: { type: integer, minimum: 1 }
+    PlaybackTicket:
+      type: object
+      required: [url, expires_in_seconds]
+      properties:
+        url: { type: string }
+        expires_in_seconds: { type: integer, minimum: 1 }
+    ThumbnailTicket:
+      type: object
+      required: [url, expires_in_seconds]
+      properties:
+        url: { type: string }
+        expires_in_seconds: { type: integer, minimum: 1 }
+    RecordingSummary:
+      type: object
+      required: [id, camera_id, camera_name, started_at, ended_at, kind, bytes, status, archive_available, checksum_sha256, archive_verified]
+      properties:
+        id: { type: string }
+        camera_id: { type: string }
+        camera_name: { type: string }
+        started_at: { type: string }
+        ended_at: { type: string, nullable: true }
+        kind: { type: string }
+        bytes: { type: integer, format: int64, minimum: 0 }
+        status: { type: string }
+        archive_available: { type: boolean }
+        checksum_sha256: { type: string, nullable: true, pattern: '^[a-f0-9]{64}$' }
+        archive_verified: { type: boolean }
+    RecordingConfig:
+      type: object
+      required: [enabled, live_enabled, live_protocol, live_protocol_available, archive_enabled, archive_verify, archive_configured, segment_seconds, local_retention_days, ffmpeg_path, checksum_algorithm]
+      properties:
+        enabled: { type: boolean }
+        live_enabled: { type: boolean }
+        live_protocol:
+          type: string
+          description: Configured live gateway protocol. `hls` is the verified default; `webrtc` requires the explicit private gateway profile.
+        live_protocol_available: { type: boolean }
+        archive_enabled: { type: boolean }
+        archive_verify: { type: boolean }
+        archive_configured: { type: boolean }
+        segment_seconds: { type: integer, minimum: 30 }
+        local_retention_days: { type: integer, minimum: 0 }
+        ffmpeg_path: { type: string }
+        checksum_algorithm: { type: string, enum: [sha256] }
+    RetentionPreview:
+      type: object
+      required: [configured_days, auto_delete_enabled, eligible_count, eligible_bytes, blocked_unarchived_count, oldest_eligible_at, eligible_recording_ids]
+      properties:
+        configured_days: { type: integer, minimum: 0 }
+        auto_delete_enabled: { type: boolean, enum: [false] }
+        eligible_count: { type: integer, minimum: 0 }
+        eligible_bytes: { type: integer, format: int64, minimum: 0 }
+        blocked_unarchived_count: { type: integer, minimum: 0 }
+        oldest_eligible_at: { type: string, nullable: true, format: date-time }
+        eligible_recording_ids:
+          type: array
+          items: { type: string }
+    RetentionCleanupRequest:
+      type: object
+      required: [confirm, recording_ids]
+      properties:
+        confirm: { type: boolean, enum: [true] }
+        recording_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { type: string }
+    RetentionCleanupResult:
+      type: object
+      required: [requested_count, deleted_count, deleted_bytes, skipped_count, deleted_recording_ids, skipped_recording_ids]
+      properties:
+        requested_count: { type: integer, minimum: 0 }
+        deleted_count: { type: integer, minimum: 0 }
+        deleted_bytes: { type: integer, format: int64, minimum: 0 }
+        skipped_count: { type: integer, minimum: 0 }
+        deleted_recording_ids:
+          type: array
+          items: { type: string }
+        skipped_recording_ids:
+          type: array
+          items: { type: string }
+    EventSummary:
+      type: object
+      required: [id, kind, recording_id, camera_id, camera_name, occurred_at, severity, message, source]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        recording_id: { type: string, nullable: true }
+        camera_id: { type: string }
+        camera_name: { type: string }
+        occurred_at: { type: string, format: date-time }
+        severity: { type: string }
+        message: { type: string }
+        source: { type: string }
+    ProviderInput:
+      allOf:
+        - $ref: '#/components/schemas/ProviderPatch'
+        - type: object
+          required: [name, main_server, app_username, app_userkey]
+    ProviderPatch:
+      type: object
+      properties:
+        name: { type: string }
+        main_server: { type: string }
+        app_username: { type: string }
+        app_userkey: { type: string, format: password }

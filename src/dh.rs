@@ -5,7 +5,10 @@ use std::{collections::HashMap, net::SocketAddrV4};
 use tokio::{net::UdpSocket, time};
 use xml::reader::{EventReader, XmlEvent};
 
-use crate::ptcp::{PTCPBody, PTCPSession, PTCP};
+use crate::ptcp::{PTCPBody, PTCPSession, Ptcp};
+
+const DH_READ_TIMEOUT: time::Duration = time::Duration::from_secs(8);
+const DEVICE_HANDSHAKE_TIMEOUT: time::Duration = time::Duration::from_secs(5);
 
 /// Performs only the provider-level DH probe. This validates that the configured
 /// endpoint accepts the supplied platform credentials; it does not connect to
@@ -68,8 +71,10 @@ pub async fn probe_provider(
     Ok(format!("Provider probe accepted ({status})."))
 }
 
-fn ip_to_bytes(ip: &str) -> Vec<u8> {
-    let addr: SocketAddrV4 = ip.parse().unwrap();
+fn ip_to_bytes(ip: &str) -> Result<Vec<u8>, String> {
+    let addr: SocketAddrV4 = ip
+        .parse()
+        .map_err(|e| format!("Invalid peer address '{ip}': {e}"))?;
     let ip = addr.ip().octets();
     let port = addr.port();
 
@@ -77,7 +82,30 @@ fn ip_to_bytes(ip: &str) -> Vec<u8> {
     bytes.extend_from_slice(&port.to_be_bytes());
     bytes.extend_from_slice(&ip);
 
-    bytes.iter().map(|b| !b).collect()
+    Ok(bytes.iter().map(|b| !b).collect())
+}
+
+fn required_body_value<'a>(
+    body: &'a HashMap<String, String>,
+    key: &str,
+    step: &str,
+) -> Result<&'a str, String> {
+    body.get(key)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{step} response did not contain required field {key}"))
+}
+
+async fn recv_with_timeout(
+    socket: &UdpSocket,
+    buffer: &mut [u8],
+    timeout: time::Duration,
+    step: &str,
+) -> Result<usize, String> {
+    time::timeout(timeout, socket.recv(buffer))
+        .await
+        .map_err(|_| format!("Timed out waiting {} seconds for {step}", timeout.as_secs()))?
+        .map_err(|e| format!("Could not read {step}: {e}"))
 }
 
 pub async fn p2p_handshake(
@@ -87,15 +115,18 @@ pub async fn p2p_handshake(
     main_server: &str,
     app_username: &str,
     app_userkey: &str,
-) -> (UdpSocket, PTCPSession) {
+) -> Result<(UdpSocket, PTCPSession), String> {
     let mut cseq = 0;
 
-    socket.connect(main_server).await.unwrap();
+    socket
+        .connect(main_server)
+        .await
+        .map_err(|e| format!("Could not connect to provider endpoint: {e}"))?;
 
     socket
         .dh_request("/probe/p2psrv", None, &mut cseq, app_username, app_userkey)
-        .await;
-    socket.dh_read().await;
+        .await?;
+    socket.dh_read().await?;
 
     socket
         .dh_request(
@@ -105,16 +136,27 @@ pub async fn p2p_handshake(
             app_username,
             app_userkey,
         )
-        .await;
-    let p2psrv = &socket.dh_read().await.body.unwrap()["body/US"];
+        .await?;
+    let p2psrv_body = socket.dh_read().await?.body.ok_or_else(|| {
+        "Online provider response did not contain a body with the P2P server".to_string()
+    })?;
+    let p2psrv = required_body_value(&p2psrv_body, "body/US", "Online provider")?;
 
     socket
         .dh_request("/online/relay", None, &mut cseq, app_username, app_userkey)
-        .await;
-    let relay = &socket.dh_read().await.body.unwrap()["body/Address"];
+        .await?;
+    let relay_body = socket.dh_read().await?.body.ok_or_else(|| {
+        "Relay discovery response did not contain a body with the relay address".to_string()
+    })?;
+    let relay = required_body_value(&relay_body, "body/Address", "Relay discovery")?;
 
-    let socket2 = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-    socket2.connect(p2psrv).await.unwrap();
+    let socket2 = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| format!("Could not bind P2P control socket: {e}"))?;
+    socket2
+        .connect(p2psrv)
+        .await
+        .map_err(|e| format!("Could not connect to P2P server {p2psrv}: {e}"))?;
 
     socket2
         .dh_request(
@@ -124,11 +166,13 @@ pub async fn p2p_handshake(
             app_username,
             app_userkey,
         )
-        .await;
-    socket2.dh_read().await;
+        .await?;
+    socket2.dh_read().await?;
 
     /*
-    TODO add support for device info request
+    Device info is intentionally not requested here until a provider/device
+    contract is confirmed. Keeping the request out avoids changing the
+    handshake sequence for implementations that do not support this endpoint.
     socket2
         .dh_request(
             format!("/info/device/{}", serial).as_ref(),
@@ -147,24 +191,37 @@ pub async fn p2p_handshake(
             Some(format!(
                 "<body><Identify>{}</Identify><IpEncrpt>true</IpEncrpt><LocalAddr>127.0.0.1:{}</LocalAddr><version>5.0.0</version></body>",
                 cid.iter().map(|b| format!("{:x}", b)).collect::<Vec<_>>().join(" "),
-                socket.local_addr().unwrap().port(),
+                socket
+                    .local_addr()
+                    .map_err(|e| format!("Could not inspect local P2P socket: {e}"))?
+                    .port(),
             ).as_ref()),
             &mut cseq,
             app_username,
             app_userkey,
         )
-        .await;
+        .await?;
 
-    socket2.connect(relay).await.unwrap();
+    socket2
+        .connect(relay)
+        .await
+        .map_err(|e| format!("Could not connect to relay {relay}: {e}"))?;
 
     socket2
         .dh_request("/relay/agent", None, &mut cseq, app_username, app_userkey)
-        .await;
-    let data = socket2.dh_read().await.body.unwrap();
-    let token = &data["body/Token"];
-    let agent = &data["body/Agent"];
+        .await?;
+    let data = socket2
+        .dh_read()
+        .await?
+        .body
+        .ok_or_else(|| "Relay agent response did not contain a body".to_string())?;
+    let token = required_body_value(&data, "body/Token", "Relay agent")?;
+    let agent = required_body_value(&data, "body/Agent", "Relay agent")?;
 
-    socket2.connect(agent).await.unwrap();
+    socket2
+        .connect(agent)
+        .await
+        .map_err(|e| format!("Could not connect to relay agent {agent}: {e}"))?;
 
     socket2
         .dh_request(
@@ -174,32 +231,43 @@ pub async fn p2p_handshake(
             app_username,
             app_userkey,
         )
-        .await;
-    socket2.dh_read().await;
+        .await?;
+    socket2.dh_read().await?;
 
-    let mut res = socket.dh_read_raw().await;
+    let mut res = socket.dh_read_raw().await?;
 
     if res.code == 100 {
-        res = socket.dh_read_raw().await;
+        res = socket.dh_read_raw().await?;
     }
 
     if res.code >= 400 {
-        if res.code == 403 {
-            println!("Device requires authentication when creating P2P channel.");
-            println!("Authentication is not supported at this time.");
-        }
-
-        panic!("Error response: {}", res.status);
+        let hint = if res.code == 403 {
+            " Device authentication is required and is not supported at this time."
+        } else {
+            ""
+        };
+        return Err(format!(
+            "P2P channel creation failed: {}.{hint}",
+            res.status
+        ));
     }
 
-    let data = res.body.unwrap();
-    let device_laddr = &data["body/LocalAddr"];
-    let device = &data["body/PubAddr"];
+    let data = res
+        .body
+        .ok_or_else(|| "P2P channel response did not contain a body".to_string())?;
+    let device_laddr = required_body_value(&data, "body/LocalAddr", "P2P channel")?;
+    let device = required_body_value(&data, "body/PubAddr", "P2P channel")?;
 
     // not necessary when relay_mode is true, but UDP is connectionless
-    socket.connect(device).await.unwrap();
+    socket
+        .connect(device)
+        .await
+        .map_err(|e| format!("Could not connect to device peer {device}: {e}"))?;
 
-    socket2.connect(main_server).await.unwrap();
+    socket2
+        .connect(main_server)
+        .await
+        .map_err(|e| format!("Could not reconnect control socket to provider: {e}"))?;
 
     socket2
         .dh_request(
@@ -209,35 +277,38 @@ pub async fn p2p_handshake(
             app_username,
             app_userkey,
         )
-        .await;
+        .await?;
 
-    socket2.connect(agent).await.unwrap();
-    // TODO check timeout
-    socket2.dh_read().await;
+    socket2
+        .connect(agent)
+        .await
+        .map_err(|e| format!("Could not reconnect to relay agent {agent}: {e}"))?;
+    socket2.dh_read().await?;
 
     let mut session = PTCPSession::new();
 
-    socket2.ptcp_request(session.send(PTCPBody::Sync)).await;
-    session.recv(socket2.ptcp_read().await);
+    socket2.ptcp_request(session.send(PTCPBody::Sync)).await?;
+    session.recv(socket2.ptcp_read().await?);
 
     if relay_mode {
-        return (socket2, session);
+        return Ok((socket2, session));
     }
 
     socket2
         .ptcp_request(session.send(PTCPBody::Command(
             b"\x17\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec(),
         )))
-        .await;
-    let mut res = session.recv(socket2.ptcp_read().await);
+        .await?;
+    let mut res = session.recv(socket2.ptcp_read().await?);
 
     while let PTCPBody::Empty = res.body {
-        res = session.recv(socket2.ptcp_read().await);
+        res = session.recv(socket2.ptcp_read().await?);
     }
 
     let sign = match res.body {
-        PTCPBody::Command(ref c) => &c[12..],
-        _ => panic!("Invalid response"),
+        PTCPBody::Command(ref c) if c.len() >= 12 => &c[12..],
+        PTCPBody::Command(_) => return Err("P2P sign response was truncated".to_string()),
+        _ => return Err("P2P sign response had an unexpected packet type".to_string()),
     };
 
     println!(
@@ -252,7 +323,10 @@ pub async fn p2p_handshake(
     let trans_id: [u8; 12] = rand::random();
     let cid: Vec<u8> = cid.iter().map(|b| !b).collect();
 
-    println!(">>> {}", socket.peer_addr().unwrap());
+    let device_peer = socket
+        .peer_addr()
+        .map_err(|e| format!("Device peer is unavailable: {e}"))?;
+    println!(">>> {}", device_peer);
     let data = [
         b"\xff\xfe\xff\xe7".to_vec(),
         cookie.to_vec(),
@@ -260,7 +334,7 @@ pub async fn p2p_handshake(
         b"\x7f\xd5\xff\xf7".to_vec(),
         cid.clone(),
         b"\xff\xfb\xff\xf7\xff\xfe".to_vec(),
-        ip_to_bytes(&device),
+        ip_to_bytes(device)?,
     ]
     .concat();
     println!(
@@ -270,23 +344,25 @@ pub async fn p2p_handshake(
             .collect::<Vec<_>>()
             .join(" ")
     );
-    socket.send(&data).await.unwrap();
+    socket
+        .send(&data)
+        .await
+        .map_err(|e| format!("Could not send device handshake: {e}"))?;
     println!("---");
 
-    println!("<<< {}", socket.peer_addr().unwrap());
+    println!("<<< {}", device_peer);
     let mut buf = [0u8; 4096];
 
-    let result = time::timeout(time::Duration::from_secs(5), socket.recv(&mut buf)).await;
-
-    if result.is_err() {
-        println!("Timeout occurred while waiting for a response from the device.");
-        println!(
-            "If the issue persists, you may need to use relay mode (--relay) with this device."
-        );
-        panic!("Timeout");
-    }
-
-    let n = result.unwrap().unwrap();
+    let n = recv_with_timeout(
+        &socket,
+        &mut buf,
+        DEVICE_HANDSHAKE_TIMEOUT,
+        "the device handshake response",
+    )
+    .await
+    .map_err(|e| {
+        format!("{e} If the issue persists, relay mode may be required for this device.")
+    })?;
     println!(
         "Raw [{}]",
         buf[0..n]
@@ -297,9 +373,12 @@ pub async fn p2p_handshake(
     );
     println!("---");
 
+    if n < 20 {
+        return Err("Device handshake response was truncated".to_string());
+    }
     let rtrans_id = &buf[8..20];
 
-    println!(">>> {}", socket.peer_addr().unwrap());
+    println!(">>> {}", device_peer);
     let data = [
         b"\xfe\xfe\xff\xe7".to_vec(),
         cookie.to_vec(),
@@ -307,7 +386,7 @@ pub async fn p2p_handshake(
         b"\x7f\xd6\xff\xf7".to_vec(),
         cid.clone(),
         b"\xff\xfb\xff\xf7\xff\xfe".to_vec(),
-        ip_to_bytes(&device_laddr),
+        ip_to_bytes(device_laddr)?,
     ]
     .concat();
     println!(
@@ -317,13 +396,22 @@ pub async fn p2p_handshake(
             .collect::<Vec<_>>()
             .join(" ")
     );
-    socket.send(&data).await.unwrap();
+    socket
+        .send(&data)
+        .await
+        .map_err(|e| format!("Could not send device address handshake: {e}"))?;
     println!("---");
 
     // read 5 times
     for _ in 0..5 {
-        println!("<<< {}", socket.peer_addr().unwrap());
-        let n = socket.recv(&mut buf).await.unwrap();
+        println!("<<< {}", device_peer);
+        let n = recv_with_timeout(
+            &socket,
+            &mut buf,
+            DEVICE_HANDSHAKE_TIMEOUT,
+            "a device address handshake packet",
+        )
+        .await?;
         println!(
             "Raw [{}]",
             buf[0..n]
@@ -337,9 +425,11 @@ pub async fn p2p_handshake(
 
     let mut session = PTCPSession::new();
 
-    socket.ptcp_request(session.send(PTCPBody::Sync)).await;
-    let mut res = session.recv(socket.ptcp_read().await);
-    assert!(matches!(res.body, PTCPBody::Sync), "Invalid response");
+    socket.ptcp_request(session.send(PTCPBody::Sync)).await?;
+    let mut res = session.recv(socket.ptcp_read().await?);
+    if !matches!(res.body, PTCPBody::Sync) {
+        return Err("Device returned an invalid PTCP sync response".to_string());
+    }
 
     socket
         .ptcp_request(
@@ -351,29 +441,33 @@ pub async fn p2p_handshake(
                 .concat(),
             )),
         )
-        .await;
+        .await?;
 
-    res = session.recv(socket.ptcp_read().await);
+    res = session.recv(socket.ptcp_read().await?);
     while let PTCPBody::Empty = res.body {
-        res = session.recv(socket.ptcp_read().await);
+        res = session.recv(socket.ptcp_read().await?);
     }
     match res.body {
         PTCPBody::Command(ref c) => {
-            assert_eq!(c[0], 0x1A, "Invalid response");
+            if c.first() != Some(&0x1A) {
+                return Err("Device returned an invalid PTCP auth response".to_string());
+            }
         }
-        _ => panic!("Invalid response"),
+        _ => return Err("Device returned an unexpected PTCP auth response".to_string()),
     }
 
     socket
         .ptcp_request(session.send(PTCPBody::Command(
             b"\x1b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec(),
         )))
-        .await;
-    res = session.recv(socket.ptcp_read().await);
+        .await?;
+    res = session.recv(socket.ptcp_read().await?);
 
-    assert!(matches!(res.body, PTCPBody::Empty), "Invalid response");
+    if !matches!(res.body, PTCPBody::Empty) {
+        return Err("Device returned an invalid PTCP close response".to_string());
+    }
 
-    (socket, session)
+    Ok((socket, session))
 }
 
 #[derive(Debug)]
@@ -387,7 +481,7 @@ struct DHResponse {
 }
 
 impl DHResponse {
-    fn parse_body(body: &str) -> HashMap<String, String> {
+    fn parse_body(body: &str) -> Result<HashMap<String, String>, String> {
         // XmlBody::Value("")
         let mut parser = EventReader::from_str(body);
         let mut stack = Vec::new();
@@ -399,7 +493,9 @@ impl DHResponse {
                     stack.push(name.local_name);
                 }
                 Ok(XmlEvent::EndElement { .. }) => {
-                    stack.pop().unwrap();
+                    stack.pop().ok_or_else(|| {
+                        "Invalid DH XML body: unexpected closing element".to_string()
+                    })?;
                 }
                 Ok(XmlEvent::Characters(s)) => {
                     let key = stack.as_slice().join("/");
@@ -408,46 +504,66 @@ impl DHResponse {
                 Ok(XmlEvent::EndDocument) => {
                     break;
                 }
-                Err(e) => panic!("Error: {}", e),
+                Err(e) => return Err(format!("Invalid DH XML body: {e}")),
                 _ => {}
             }
         }
 
-        tree
+        if !stack.is_empty() {
+            return Err("Invalid DH XML body: unclosed element".to_string());
+        }
+
+        Ok(tree)
     }
 
-    fn parse_response(res: &str) -> DHResponse {
+    fn parse_response(res: &str) -> Result<DHResponse, String> {
         // split head and body by "\r\n\r\n"
-        let mut parts = res.split("\r\n\r\n");
-        let head = parts.next().unwrap();
-        let body = parts.next().unwrap();
+        let (head, body) = res
+            .split_once("\r\n\r\n")
+            .ok_or_else(|| "Invalid DH response: header/body separator is missing".to_string())?;
 
         let mut head_parts = head.split("\r\n");
-        let mut status_line = head_parts.next().unwrap().split(" ");
-        let version = status_line.next().unwrap().to_string();
-        let code = status_line.next().unwrap().parse::<u16>().unwrap();
-        let status = status_line.next().unwrap().to_string();
+        let status_line = head_parts
+            .next()
+            .ok_or_else(|| "Invalid DH response: status line is missing".to_string())?;
+        let mut status_parts = status_line.splitn(3, ' ');
+        let version = status_parts
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Invalid DH response: protocol version is missing".to_string())?
+            .to_string();
+        let code = status_parts
+            .next()
+            .ok_or_else(|| "Invalid DH response: status code is missing".to_string())?
+            .parse::<u16>()
+            .map_err(|e| format!("Invalid DH response status code: {e}"))?;
+        let status = status_parts.next().unwrap_or_default().trim().to_string();
 
         let mut headers = HashMap::new();
         for line in head_parts {
-            let mut parts = line.split(": ");
-            let key = parts.next().unwrap().to_string();
-            let value = parts.next().unwrap().to_string();
-            headers.insert(key, value);
+            let (key, value) = line
+                .split_once(':')
+                .ok_or_else(|| format!("Invalid DH response header: {line}"))?;
+            let key = key.trim();
+            let value = value.trim();
+            if key.is_empty() {
+                return Err("Invalid DH response header: name is empty".to_string());
+            }
+            headers.insert(key.to_string(), value.to_string());
         }
 
         let body = match body.trim().len() {
             0 => None,
-            _ => Some(DHResponse::parse_body(body)),
+            _ => Some(DHResponse::parse_body(body)?),
         };
 
-        DHResponse {
+        Ok(DHResponse {
             version,
             code,
             status,
             headers,
             body,
-        }
+        })
     }
 }
 
@@ -460,15 +576,18 @@ trait DHP2P {
         seq: &mut u32,
         username: &str,
         userkey: &str,
-    );
-    async fn dh_read_raw(&self) -> DHResponse;
+    ) -> Result<(), String>;
+    async fn dh_read_raw(&self) -> Result<DHResponse, String>;
 
-    async fn dh_read(&self) -> DHResponse {
+    async fn dh_read(&self) -> Result<DHResponse, String> {
         let res = self.dh_read_raw().await;
 
-        assert!(res.code < 300, "Error response: {}", res.status);
+        let res = res?;
+        if res.code >= 300 {
+            return Err(format!("DH provider returned {} {}", res.code, res.status));
+        }
 
-        res
+        Ok(res)
     }
 }
 
@@ -481,16 +600,13 @@ impl DHP2P for UdpSocket {
         seq: &mut u32,
         username: &str,
         userkey: &str,
-    ) {
+    ) -> Result<(), String> {
         let method = match body {
             Some(_) => "DHPOST",
             None => "DHGET",
         };
 
-        let body = match body {
-            Some(s) => s,
-            None => "",
-        };
+        let body = body.unwrap_or_default();
 
         let nonce = rand::random::<u32>();
         let currdate = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -499,7 +615,7 @@ impl DHP2P for UdpSocket {
         let mut hasher = sha1::Sha1::new();
         hasher.update(pwd);
         let hash_digest = hasher.finalize();
-        let digest = base64::engine::general_purpose::STANDARD.encode(&hash_digest);
+        let digest = base64::engine::general_purpose::STANDARD.encode(hash_digest);
 
         *seq += 1;
 
@@ -511,27 +627,69 @@ impl DHP2P for UdpSocket {
             method, path, seq, username, digest, nonce, currdate, body,
         );
 
-        println!(">>> {}", self.peer_addr().unwrap());
-        println!("{}", req);
-        println!("---");
+        let peer = self
+            .peer_addr()
+            .map_err(|e| format!("DH peer is unavailable: {e}"))?;
+        println!(">>> {} {} {} (CSeq {})", peer, method, path, seq);
 
-        self.send(req.as_bytes()).await.unwrap();
+        self.send(req.as_bytes())
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("Could not send DH request: {e}"))
     }
 
-    async fn dh_read_raw(&self) -> DHResponse {
-        println!("### {}", self.peer_addr().unwrap());
+    async fn dh_read_raw(&self) -> Result<DHResponse, String> {
+        let peer = self
+            .peer_addr()
+            .map_err(|e| format!("DH peer is unavailable: {e}"))?;
+        println!("### {}", peer);
 
         let mut buf = [0u8; 4096];
-        let n = self.recv(&mut buf).await.unwrap();
+        let n = time::timeout(DH_READ_TIMEOUT, self.recv(&mut buf))
+            .await
+            .map_err(|_| {
+                format!(
+                    "Timed out waiting {} seconds for DH response from {peer}",
+                    DH_READ_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|e| format!("Could not read DH response: {e}"))?;
         let res = String::from_utf8_lossy(&buf[0..n]);
 
-        println!("<<< {}", self.peer_addr().unwrap());
-        println!("{}", res);
-        println!("---");
+        println!("<<< DH {}", peer);
 
-        let res = DHResponse::parse_response(&res);
-        println!("{:?}", res);
+        let res = DHResponse::parse_response(&res)?;
+        println!("DH response {} {}", res.code, res.status);
 
-        res
+        Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_dh_responses_return_errors() {
+        assert!(DHResponse::parse_response("not a DH response").is_err());
+        assert!(DHResponse::parse_response("HTTP/1.1 200 OK\r\n\r\n<broken").is_err());
+        assert!(DHResponse::parse_response("HTTP/1.1 nope OK\r\n\r\n").is_err());
+    }
+
+    #[test]
+    fn dh_response_keeps_nested_body_keys() {
+        let response = DHResponse::parse_response(
+            "HTTP/1.1 200 OK\r\nCSeq: 1\r\n\r\n<body><Address>127.0.0.1:8800</Address></body>",
+        )
+        .expect("valid DH response should parse");
+
+        assert_eq!(response.code, 200);
+        assert_eq!(
+            response
+                .body
+                .as_ref()
+                .and_then(|body| body.get("body/Address")),
+            Some(&"127.0.0.1:8800".to_string())
+        );
     }
 }

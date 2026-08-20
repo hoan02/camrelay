@@ -1,0 +1,29 @@
+logLevel: warn
+
+# RTSP is reachable only from the private Compose media network.
+rtsp: true
+rtspAddress: :8554
+
+# Camrelay proxies WHEP signaling. ICE host exposure is intentionally not
+# enabled in this baseline profile; a reviewed LAN/TURN gateway can be added
+# later without changing the camera credential boundary.
+webrtc: true
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcAllowOrigins:
+  - http://localhost:8080
+
+# No media secret is used. Private-network reachability and the Camrelay live
+# ticket are the boundary for this baseline. MediaMTX is not published on
+# 8554, 8889, or 8189.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    permissions:
+      - action: publish
+        path: ~^camrelay/.*$
+      - action: read
+        path: ~^camrelay/.*$
+
+paths: {}

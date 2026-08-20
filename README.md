@@ -4,6 +4,16 @@ Self-hosted P2P camera relay written in Rust. `camrelay` exposes an authorized r
 
 The project currently contains a multi-camera manager, a web dashboard, a REST API, JSON-backed configuration, and a Dahua P2P/PTCP tunnel implementation. Compatibility with a specific vendor, model, firmware, or cloud app must be verified against a real device; this repository does not claim IMOU compatibility without a successful source-level or live-device test.
 
+## v1 foundation status
+
+The `v1-foundation` branch is an incremental migration from the known `prototype-v0.1` relay baseline. The Rust binary and `static/` console remain the rollback path while the new API-first boundaries are verified:
+
+- Rust is now a Cargo workspace with a transport-independent `camrelay-contract` crate.
+- `apps/web` contains the new React/TypeScript console foundation with real browser routes, design tokens, dark/light mode, persistent English/Vietnamese settings, and an API client.
+- `apps/mobile` contains the Flutter companion using the same versioned API and platform secure storage for bearer tokens; Android runner generation, debug APK build, analyzer, and widget test are verified locally.
+- `packages/design-tokens` is the first shared visual language seam for the future web and mobile clients.
+- `apps/web` is the feature-parity v1 console for development and can be served by the Rust binary by setting `web_root` to `apps/web/dist`; the legacy console remains available as a rollback path.
+
 ## Overview
 
 The service connects to a camera through a configured P2P cloud endpoint, establishes a PTCP session, and listens on a local TCP port. RTSP clients connect to that local port using the camera's normal RTSP path.
@@ -42,10 +52,13 @@ flowchart LR
 - Direct browser routes for login, dashboard, cameras, providers, tokens, settings, and technical guide.
 - Dark/light theme, English/Vietnamese interface, and responsive control-room layout.
 - Separate platform credentials from camera RTSP credentials in the setup flow.
+- Owner-only user administration with role summaries and Argon2id password creation in SQLite mode.
 - Provider probe before a camera can be added; the probe validates provider signaling only.
 - Auto-start for cameras with `auto_start: true`.
 - Brand-specific P2P server and app credentials.
-- JSON files instead of a database.
+- SQLite v1 persistence with encrypted provider/camera secrets, Argon2id user passwords, refresh sessions, RBAC, and idempotent import from legacy JSON files.
+- Optional local HLS live preview through FFmpeg and a loopback-only RTSP credential proxy; camera secrets do not enter the FFmpeg command line or a sidecar service.
+- Live playback uses a transport-shaped ticket contract. HLS is the verified gateway today; an opt-in private MediaMTX/WHEP foundation exists, while web and mobile clients reject unsupported protocols explicitly.
 - Direct and relay handshake paths in the Rust implementation, subject to device/cloud support.
 
 ### Not yet promised
@@ -53,13 +66,11 @@ flowchart LR
 - Universal Dahua compatibility.
 - IMOU compatibility.
 - Automatic discovery or provisioning of cameras.
-- TLS, encrypted configuration storage, or production-grade secret management.
+- Built-in TLS, encrypted legacy JSON configuration, or production-grade external secret management.
 - Guaranteed reconnection after every network or device failure.
 - A native Frigate integration.
 - Provider probe success does not guarantee camera, firmware, model, region, or RTSP compatibility.
-- Optional FFmpeg segment recording with a JSON recording index.
-- Optional Google Drive archiving through a local rclone remote.
-- Ticket-protected browser playback with HTTP Range seeking for local files or archived files.
+- Long-term universal device compatibility, automatic discovery, native Frigate integration, and unattended production reliability are not promised yet.
 
 ## Build and run
 
@@ -97,10 +108,40 @@ The web manager has these browser routes:
 | `/recordings` | Closed-segment browser playback and archive status. |
 | `/providers` | Platform provider profiles and provider probe. |
 | `/tokens` | API token management. |
+| `/users` | Owner-only appliance user and role management. |
 | `/settings` | Language and dark/light theme. |
 | `/about` | Architecture, protocol, security, and compatibility notes. |
 
 Because routes are real paths, refreshing `/cameras` or `/providers` keeps that page selected.
+
+### New React console (development)
+
+Run the Rust service in one terminal, then start the new console from the repository root in another:
+
+```bash
+npm install
+npm run web:dev
+```
+
+Open `http://127.0.0.1:5173/login`. Vite proxies `/api` to the Rust service on port `8080`. The console covers the v1 dashboard, camera/provider CRUD, lifecycle controls, recording playback/archive actions, API tokens, settings, and technical notes.
+
+To serve the built console from the Rust binary locally:
+
+```bash
+npm run web:build
+# set web_root in config.json to "apps/web/dist", or export
+# CAMRELAY_WEB_ROOT=apps/web/dist
+cargo run --release
+```
+
+Leave `web_root` as `static` to roll back to the legacy console.
+
+### Flutter companion (foundation)
+
+The mobile client lives in `apps/mobile` and targets the same `/api/v1`
+contract. Install Flutter, then run `flutter pub get`, `flutter analyze`, and
+`flutter test` from that directory. The app stores its bearer token in platform
+secure storage and never receives provider or camera credentials.
 
 The service reads JSON files from its current working directory. Missing `config.json` falls back to the built-in admin/port defaults; brands, cameras, and tokens fall back to empty lists.
 
@@ -182,10 +223,15 @@ Start a camera from the dashboard or API and wait until its tunnel status is `ru
 
 ```bash
 ffplay -rtsp_transport tcp \
-  "rtsp://admin:DEVICE_RTSP_PASSWORD@127.0.0.1:8551/cam/realmonitor?channel=1&subtype=0"
+  "rtsp://127.0.0.1:8551/cam/realmonitor?channel=1&subtype=0"
 ```
 
-The local port is the configured `local_port`; the RTSP path and channel can vary by device. Use the exact path required by the camera/NVR.
+The example intentionally contains no username, password, bearer token, or
+media secret. The local port is the configured `local_port`; the RTSP path and
+channel can vary by device. If the raw tunnel challenges for camera
+authentication, configure credentials in the trusted media consumer instead
+of embedding them in the URL or shell history. The ticketed HLS/WebRTC paths
+keep camera authentication inside Camrelay.
 
 For Frigate or another NVR, point the input at the same local RTSP URL. Ensure the relay host can reach the local port and that the service remains running.
 
@@ -203,15 +249,22 @@ Enable recording in config.json:
 
     {
       "recordings_enabled": true,
+      "live_enabled": true,
+      "live_dir": "live",
+      "live_protocol": "hls",
+      "webrtc_enabled": false,
       "recordings_dir": "recordings",
       "recordings_index": "recordings.json",
       "segment_seconds": 300,
       "ffmpeg_path": "ffmpeg",
       "archive_enabled": true,
+      "archive_verify": false,
       "archive_remote": "gdrive:camrelay-archive",
       "archive_root": "camrelay-archive",
       "archive_poll_seconds": 15,
-      "local_retention_days": 0
+      "local_retention_days": 0,
+      "database_enabled": false,
+      "database_path": "camrelay.sqlite"
     }
 
 Install FFmpeg and make sure ffmpeg is on PATH, or set an absolute ffmpeg_path. The recorder starts only while the camera tunnel is running. It writes one MP4 segment per camera and indexes a segment after it has been closed.
@@ -222,9 +275,13 @@ For Google Drive, configure an rclone remote locally:
     rclone lsd gdrive:
     rclone mkdir gdrive:camrelay-archive
 
-Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically.
+Set archive_remote to the configured remote name and enable archive_enabled. Uploads use rclone copyto with bounded retries; no Google OAuth secret or service-account key belongs in this repository. The Archive now action retries one segment on demand, while the background worker uploads new local segments automatically. Set archive_verify to true only when you want Camrelay to download each remote object again and compare its SHA-256 before marking it verified; this adds cloud bandwidth and latency.
 
 The browser requests a short-lived playback ticket for one recording. The ticket is scoped to that recording and expires after ten minutes; the main dashboard bearer token is not placed in a video URL. The stream endpoint supports Range so the browser can seek. If the local file has been removed and the recording is archived, camrelay invokes rclone cat for playback.
+
+To enable browser live preview, set `live_enabled` to `true`, install FFmpeg, start the camera relay, and press Live on the camera card. Camrelay creates short-lived HLS segments under `live_dir`, serves them through a camera-scoped ticket, and uses an in-process RTSP auth proxy so the camera username/password stays inside camrelay. HLS is the verified default. An experimental WebRTC foundation is available only through the private Compose override documented in [`docs/media-gateway.md`](docs/media-gateway.md); it uses a fixed credential-free internal publisher URL and does not publish MediaMTX ports.
+
+The SQLite v1 foundation is opt-in for now. Set `database_enabled` to `true` to create the configured database, apply SQLx migrations, and import any legacy JSON files idempotently. Before enabling it when providers or cameras exist, set `CAMRELAY_SECRET_KEY` to a base64-encoded 32-byte key (see `.env.example`). User passwords are Argon2id hashes; provider and camera secrets are encrypted with ChaCha20-Poly1305 and the master key must be backed up separately. In SQLite mode, v1 camera/provider reads, camera onboarding, tunnel startup, auto-start, recording reconciliation, auth, and token management use SQLite. Legacy JSON handlers remain available only as a rollback path; the database file is ignored by Git.
 
 For a first test, leave archive_enabled false, enable recording, start one camera, wait for one segment to close, and open /recordings. Then configure rclone and archive the same segment.
 
@@ -292,8 +349,14 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 | GET | `/api/recordings` | List indexed recording segments with optional camera/status filters. |
 | GET | `/api/recordings/config` | Read safe recording/archive capability settings. |
 | POST | `/api/recordings/:id/playback-ticket` | Issue a short-lived ticket for one recording. |
+| POST | `/api/recordings/:id/thumbnail-ticket` | Issue a short-lived ticket for a local JPEG thumbnail. |
 | GET | `/api/playback/:id?ticket=...` | Stream local or archived MP4 with Range support. |
 | POST | `/api/recordings/:id/archive` | Upload one segment through the configured rclone remote. |
+
+The legacy credential-bearing GET routes (`/api/brands`, `/api/cameras`,
+`/api/cameras/all`, and `/api/tokens`) are restricted to owner/admin roles.
+The versioned `/api/v1` routes return secret-free summaries to authorized
+clients and are the preferred integration surface.
 
 ## Security notes
 
@@ -312,19 +375,27 @@ The web manager is served by the same Rust process. API routes are under `/api` 
 - Relay mode exists in the handshake code but is not exposed as a per-camera setting.
 - The web server has no built-in TLS.
 - Runtime JSON is plaintext and writes are not transactional.
-- Recording files are local plaintext media; local_retention_days defaults to 0 (never delete automatically).
+- Recording files are local plaintext media; local_retention_days defaults to 0 (never delete automatically). The v1 API exposes a read-only retention preview and an owner/admin-only, explicitly confirmed cleanup action; automatic deletion and cloud-object deletion are not enabled.
 - Provider probe state is kept in the current browser session and must be repeated after a reload or service restart.
 - Error handling and reconnect behavior still need hardening for unattended NVR use.
 
 ## Roadmap
 
-1. Add repeatable local tests for configuration, PTCP framing, API authentication, and tunnel lifecycle.
-2. Add explicit health/readiness endpoints and structured logs.
-3. Improve reconnect, timeout, cancellation, and relay-mode controls.
-4. Validate supported device families with authorized test hardware and document results by model/firmware.
-5. Add safer secret handling and optional encrypted or external configuration.
-6. Add deployment examples for Frigate, systemd, containers, and reverse proxies.
-7. Add transactional recording metadata storage, upload checksums, resumable Drive API support, thumbnails, event markers, and retention cleanup after more field testing.
+Completed in the v1 foundation:
+
+- versioned API contract, SQLite persistence, encrypted device/provider secrets, auth sessions, RBAC, token management, readiness, and CRUD;
+- React console routes for dashboard/live wall, cameras, providers, filtered recordings/timeline, tokens, settings, audit history, and technical notes;
+- local recording playback/thumbnail tickets, Range streaming, archive actions, read-only retention preview, owner/admin-confirmed local cleanup, privacy-safe audit history, backup/restore scripts, and Compose configuration.
+
+Next, in order:
+
+1. Make the React build the default production console after a final migration review; keep `static/` as an explicit rollback option.
+2. Validate the private MediaMTX/WHEP gateway foundation with an authorized H264 camera; HLS is already available for web/mobile and Frigate/FFmpeg integrations. LAN ICE/TURN exposure remains a separate reviewed boundary.
+3. Add resumable archive transfer and event markers; local JPEG thumbnail generation, recording SHA-256 metadata, remote verification, retention preview, and owner/admin-confirmed local cleanup are now indexed/exposed.
+4. Validate supported device families with authorized hardware and document results by model, firmware, region, and provider profile; IMOU remains unclaimed until source-level or live-device evidence exists.
+5. Validate ticket-backed playback on an authorized Android device and complete the iOS runner/device build on macOS; then add browser/Flutter WebRTC adapters after real gateway evidence.
+
+See [the media gateway design](docs/media-gateway.md) and [the authorized device validation matrix](docs/device-validation-matrix.md) for the next-phase contracts and evidence requirements.
 
 ## Protocol and investigation notes
 

@@ -1,0 +1,28 @@
+# Explicit private-network WebRTC profile.
+# No RTSP, WHEP, or ICE port is published to the host by this baseline.
+services:
+  camrelay:
+    environment:
+      CAMRELAY_WEBRTC_ENABLED: ${CAMRELAY_WEBRTC_ENABLED:-true}
+    depends_on:
+      mediamtx:
+        condition: service_started
+    networks:
+      - default
+      - media
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.19.3
+    restart: unless-stopped
+    expose:
+      - "8554"
+      - "8889"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    networks:
+      - media
+
+networks:
+  default: {}
+  media:
+    internal: true
